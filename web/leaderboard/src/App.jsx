@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import './App.css'
-import { getViewFromPath, PAGE_META, pageUrl, REPO_URL, SITE_URL, stripBase, VIEW_PATHS, withBase } from './routes'
+import { getViewFromPath, PAGE_META, pageUrl, REPO_URL, PAPER_URL, SITE_URL, stripBase, VIEW_PATHS, withBase } from './routes'
 import BuildTrajectories from './components/BuildTrajectories'
 import HyperTau from './components/HyperTau'
 
@@ -116,6 +116,15 @@ function App() {
               onClick={() => setMobileMenuOpen(false)}
             >
               GitHub ↗
+            </a>
+            <a
+              href={PAPER_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="nav-paper-btn"
+              onClick={() => setMobileMenuOpen(false)}
+            >
+              Paper ↗
             </a>
             <a href="https://taubench.com" className="nav-taubench-btn" onClick={() => setMobileMenuOpen(false)}>
               ← τ-bench.com

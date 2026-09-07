@@ -115,8 +115,9 @@ body {
   vertical-align: 0.55em;
 }
 
-/* Nav buttons: the public repository and back to the main τ-bench site */
+/* Nav buttons: the public repository, the paper, and back to the main τ-bench site */
 .nav-github-btn,
+.nav-paper-btn,
 .nav-taubench-btn {
   display: inline-flex;
   align-items: center;
@@ -132,6 +133,7 @@ body {
 }
 
 .nav-github-btn:hover,
+.nav-paper-btn:hover,
 .nav-taubench-btn:hover {
   border-color: #065f46;
   color: #065f46;

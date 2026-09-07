@@ -1,7 +1,7 @@
 // Routing + prerendering behavior tests. Run against the prerendered dist/
 // served with GitHub Pages semantics (see playwright.config.js).
 import { expect, test } from '@playwright/test'
-import { REPO_URL, SITE_BASE, SITE_URL } from '../src/routes.js'
+import { PAPER_URL, REPO_URL, SITE_BASE, SITE_URL } from '../src/routes.js'
 
 // Every request goes through the served base path, like on GitHub Pages.
 const at = (route) => `${SITE_BASE}${route}`
@@ -87,6 +87,18 @@ test('nav and submission links point at the public repository', async ({ page })
     `${REPO_URL}#submitting-to-the-leaderboard`
   )
   await expect(page.locator('.submissions-link.secondary')).toHaveAttribute('href', `${REPO_URL}/pulls`)
+})
+
+test('nav links the paper after the repository', async ({ page }) => {
+  await page.goto(at('/'))
+  const paperLink = page.locator('.nav-paper-btn')
+  await expect(paperLink).toBeVisible()
+  await expect(paperLink).toHaveAttribute('href', PAPER_URL)
+  await expect(paperLink).toHaveAttribute('target', '_blank')
+  // Order in the nav: GitHub, then Paper, then back to τ-bench.com.
+  const hrefs = await page.locator('.nav-links a').evaluateAll((as) => as.map((a) => a.getAttribute('href')))
+  expect(hrefs.indexOf(REPO_URL)).toBeGreaterThanOrEqual(0)
+  expect(hrefs.indexOf(PAPER_URL)).toBe(hrefs.indexOf(REPO_URL) + 1)
 })
 
 test('human chip toggles the easter-egg tooltip', async ({ page }) => {

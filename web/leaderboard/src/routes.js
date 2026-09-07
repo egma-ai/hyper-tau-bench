@@ -38,6 +38,9 @@ export const REPO_URL = 'https://github.com/sierra-research/hyper-tau-bench'
 export const repoUrl = (path = '', kind = 'blob') =>
   path ? `${REPO_URL}/${kind}/main/${path.replace(/^\/+/, '')}` : REPO_URL
 
+// The τ^τ-bench paper (arXiv). Linked from the nav next to the repository.
+export const PAPER_URL = 'https://arxiv.org/abs/2609.04611'
+
 // path → view name.
 export const ROUTES = {
   '/': 'hyper-tau',

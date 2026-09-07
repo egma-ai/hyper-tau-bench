@@ -231,3 +231,20 @@ ask for build trajectories or rerun a sample of tasks before merging.
 | `src/tau2/` (rest) | The τ³-bench inner loop this repo builds on: orchestrator, domains, user simulator, evaluation |
 | `data/tau2/hyper/` | Task definitions, compiled evidence bundles, SOP corpora and renders, seeded workspaces |
 | `web/leaderboard/` | Standalone results site and build-trajectory visualizer |
+
+## Citation
+
+If you use τ^τ-bench in your work, please cite the paper
+([arXiv:2609.04611](https://arxiv.org/abs/2609.04611)):
+
+```bibtex
+@misc{shi2026tautaubenchenvironmentendtoendrealistic,
+      title={$\tau^\tau$-Bench: An Environment for End-To-End, Realistic Agent Construction}, 
+      author={Quan Shi and Keshav Dhandhania and Karthik Narasimhan and Victor Barres},
+      year={2026},
+      eprint={2609.04611},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI},
+      url={https://arxiv.org/abs/2609.04611}, 
+}
+```
