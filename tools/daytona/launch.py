@@ -171,6 +171,17 @@ def sandbox_exec(sandbox, command: str, timeout: int = 120) -> tuple[int, str]:
     return response.exit_code, response.result or ""
 
 
+def with_retries(action, attempts: int = 4, delay: float = 10.0):
+    """Run a Daytona API call, retrying transient failures."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return action()
+        except Exception:  # noqa: BLE001 - re-raised after the last attempt
+            if attempt == attempts:
+                raise
+            time.sleep(delay * attempt)
+
+
 def create_sandbox(daytona, run_name: str, task_id: str):
     from daytona import CreateSandboxFromImageParams, Image, Resources
 
@@ -208,14 +219,16 @@ def collect(sandbox, task_dir: Path) -> list[Path]:
             continue
         if content is not None:
             (task_dir / name).write_bytes(content)
-    _, listing = sandbox_exec(
-        sandbox, f"ls -1 {SANDBOX_RECORDINGS}/*.json 2>/dev/null || true"
+    _, listing = with_retries(
+        lambda: sandbox_exec(
+            sandbox, f"ls -1 {SANDBOX_RECORDINGS}/*.json 2>/dev/null || true"
+        )
     )
     recordings = []
     for remote in listing.split():
         if remote.endswith(".in_progress.json"):
             continue
-        content = sandbox.fs.download_file(remote)
+        content = with_retries(lambda remote=remote: sandbox.fs.download_file(remote))
         if content is not None:
             local = task_dir / Path(remote).name
             local.write_bytes(content)
@@ -292,9 +305,21 @@ def run_one(daytona, args, state: RunState, task_id: str, inputs, job_base) -> N
             start_task(sandbox, {**job_base, "TASK_ID": task_id}, inputs)
 
         last_state = None
+        poll_errors = 0
         deadline = time.monotonic() + SANDBOX_TTL_MINUTES * 60
         while time.monotonic() < deadline:
-            _, current = sandbox_exec(sandbox, f"cat {SANDBOX_HOME}/state 2>/dev/null")
+            try:
+                _, current = sandbox_exec(
+                    sandbox, f"cat {SANDBOX_HOME}/state 2>/dev/null"
+                )
+                poll_errors = 0
+            except Exception as exc:  # noqa: BLE001 - transient API errors
+                poll_errors += 1
+                if poll_errors >= 15:
+                    raise
+                log(f"{task_id[:3]} poll error {poll_errors}/15: {exc}")
+                time.sleep(args.poll_seconds)
+                continue
             current = current.strip() or "booting"
             if current != last_state:
                 log(f"{task_id[:3]} {current}")
@@ -328,8 +353,13 @@ def run_one(daytona, args, state: RunState, task_id: str, inputs, job_base) -> N
         if args.stop_on_failure and state.get(task_id).get("status") == "failed":
             args.abort.set()
         if sandbox is not None and not args.keep_sandboxes:
-            final = state.get(task_id).get("status")
-            if final in ("done", "failed"):
+            final = state.get(task_id)
+            # Keep a sandbox when the launcher itself errored: the task may
+            # still be running there, and a rerun re-attaches by label.
+            finished_in_sandbox = final.get("status") == "done" or str(
+                final.get("phase", "")
+            ).startswith(("failed:", "done"))
+            if finished_in_sandbox:
                 try:
                     daytona.delete(sandbox)
                     log(f"{task_id[:3]} sandbox deleted")
