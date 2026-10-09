@@ -17,6 +17,7 @@ def _tool_definitions(
     include_client: bool,
     include_live_experiment: bool,
     include_sample_scenarios: bool,
+    include_corpus_search: bool = False,
 ) -> list[dict]:
     tools = [
         {
@@ -43,6 +44,21 @@ def _tool_definitions(
             "inputSchema": {"type": "object", "properties": {}},
         },
     ]
+    if include_corpus_search:
+        from tau2.hyper.sandbox.corpus_search import (
+            TOOL_DESCRIPTION,
+            TOOL_INPUT_SCHEMA,
+            TOOL_NAME,
+        )
+
+        tools.insert(
+            1,
+            {
+                "name": TOOL_NAME,
+                "description": TOOL_DESCRIPTION,
+                "inputSchema": TOOL_INPUT_SCHEMA,
+            },
+        )
     if include_sample_scenarios:
         tools.insert(
             1,
@@ -166,6 +182,9 @@ def _handle(message: dict) -> dict | None:
                     include_client=include_client,
                     include_live_experiment=include_live_experiment,
                     include_sample_scenarios=include_sample_scenarios,
+                    include_corpus_search=(
+                        os.environ.get("TAU2_CORPUS_SEARCH_TOOL_ENABLED") == "1"
+                    ),
                 )
             },
         )

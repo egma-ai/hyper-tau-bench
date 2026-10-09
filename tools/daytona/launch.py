@@ -216,12 +216,12 @@ def with_retries(action, attempts: int = 4, delay: float = 10.0):
             time.sleep(delay * attempt)
 
 
-def create_sandbox(daytona, run_name: str, task_id: str):
+def create_sandbox(daytona, run_name: str, task_id: str, memory_gb: int):
     from daytona import CreateSandboxFromImageParams, Image, Resources
 
     params = CreateSandboxFromImageParams(
         image=Image.base(DIND_IMAGE),
-        resources=Resources(cpu=4, memory=8, disk=10),
+        resources=Resources(cpu=4, memory=memory_gb, disk=10),
         labels={"hypertau-run": run_name, "hypertau-slot": task_id[:3]},
         auto_stop_interval=0,
         ttl_minutes=SANDBOX_TTL_MINUTES,
@@ -331,7 +331,7 @@ def run_one(daytona, args, state: RunState, task_id: str, inputs, job_base) -> N
             task_inputs = dict(inputs)
             if args.chatgpt_access:
                 task_inputs["chatgpt-auth.json"] = args.chatgpt_access.get()
-            sandbox = create_sandbox(daytona, args.run_name, task_id)
+            sandbox = create_sandbox(daytona, args.run_name, task_id, args.memory_gb)
             state.update(
                 task_id,
                 status="running",
@@ -423,7 +423,9 @@ def summarize(args, state: RunState, tasks: list[str]) -> dict:
             "model": args.developer_llm,
             "reasoning_effort": args.developer_effort,
             "auth": args.developer_auth,
+            "corpus_search": args.corpus_search,
         },
+        "sandbox": {"memory_gb": args.memory_gb, "inner_workers": args.inner_workers},
         "tasks_total": len(tasks),
         "tasks_done": len(done),
         "tasks_failed": sum(1 for _, e in rows if e.get("status") == "failed"),
@@ -477,8 +479,26 @@ def main() -> None:
         help="a local Codex login auth.json instead of the login stored on "
         "Daytona by chatgpt_login.py",
     )
+    parser.add_argument(
+        "--corpus-search",
+        action="store_true",
+        help="experiment: give the Developer the search_corpus tool and skill",
+    )
     parser.add_argument("--base-commit", help="upstream commit (default: merge-base)")
     parser.add_argument("--repo-url", default=UPSTREAM_REPO)
+    parser.add_argument(
+        "--memory-gb",
+        type=int,
+        default=16,
+        help="sandbox memory; 8 GiB was OOM-killed by 32-wide scoring",
+    )
+    parser.add_argument(
+        "--inner-workers",
+        type=int,
+        default=8,
+        help="parallel scoring simulations (TAU2_HYPER_INNER_MAX_WORKERS; tau2 "
+        "defaults to 32, each a sealed candidate container)",
+    )
     parser.add_argument("--poll-seconds", type=int, default=60)
     parser.add_argument(
         "--stagger-seconds",
@@ -513,6 +533,7 @@ def main() -> None:
     if args.developer_auth == "chatgpt":
         args.chatgpt_access = ChatGPTAccess(args.chatgpt_auth)
         dotenv["TAU2_CHATGPT_AUTH_FILE"] = f"{SANDBOX_HOME}/chatgpt-auth.json"
+    dotenv["TAU2_HYPER_INNER_MAX_WORKERS"] = str(args.inner_workers)
     inputs["dotenv"] = "".join(f"{k}={v}\n" for k, v in dotenv.items()).encode()
     job_base = {
         "BASE_COMMIT": base,
@@ -520,6 +541,7 @@ def main() -> None:
         "DEV_LLM": args.developer_llm,
         "DEV_EFFORT": args.developer_effort,
         "DEV_AUTH": args.developer_auth,
+        "DEV_CORPUS_SEARCH": "1" if args.corpus_search else "0",
     }
     pending = [t for t in tasks if state.get(t).get("status") != "done"]
     log(

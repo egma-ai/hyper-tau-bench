@@ -1119,6 +1119,16 @@ def main():
         ),
     )
     hyper_tau_parser.add_argument(
+        "--developer-corpus-search",
+        action="store_true",
+        help=(
+            "Experiment: give the Developer the search_corpus tool and its "
+            "skill, which ask a yes/no question of every task-material file "
+            "through the OpenAI Decisions API (codex harness only; needs "
+            "OPENAI_API_KEY on the host)."
+        ),
+    )
+    hyper_tau_parser.add_argument(
         "--sandbox-steps",
         type=int,
         default=0,
@@ -1636,12 +1646,14 @@ def _run_hyper_tau_sandbox(args, task, console):
 
     developer_harness = getattr(args, "developer_harness", DEFAULT_DEVELOPER_HARNESS)
     developer_auth = getattr(args, "developer_auth", "api-key")
+    developer_corpus_search = getattr(args, "developer_corpus_search", False)
     builder = create_developer_builder(
         developer_harness,
         args.developer_llm,
         developer_llm_args,
         getattr(args, "developer_reasoning_effort", None),
         developer_auth,
+        developer_corpus_search=developer_corpus_search,
     )
 
     kit_dir = Path(args.kit_dir) if getattr(args, "kit_dir", None) else None
@@ -1683,6 +1695,7 @@ def _run_hyper_tau_sandbox(args, task, console):
         "mode": "sandbox",
         "developer_harness": developer_harness,
         "developer_auth": developer_auth,
+        "developer_corpus_search": developer_corpus_search,
         "developer_llm": args.developer_llm,
         "developer_llm_args": developer_llm_args,
         "agent_llm": orchestrator.agent_llm,

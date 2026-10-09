@@ -20,6 +20,7 @@ def create_developer_builder(
     developer_llm_args: dict | None,
     developer_reasoning_effort: str | None,
     developer_auth: str = "api-key",
+    developer_corpus_search: bool = False,
 ) -> SandboxBuilder:
     """Build the selected coding-agent integration for a construction run."""
     native_llm_args = dict(developer_llm_args or {})
@@ -29,6 +30,8 @@ def create_developer_builder(
         raise ValueError(
             f"Developer auth {developer_auth!r} is only supported by the codex harness"
         )
+    if developer_corpus_search and developer_harness != "codex":
+        raise ValueError("search_corpus is only wired for the codex harness")
 
     if developer_harness == "codex":
         from tau2.hyper.harnesses.codex import CodexSandboxBuilder
@@ -37,6 +40,7 @@ def create_developer_builder(
             llm=developer_llm,
             llm_args=native_llm_args,
             developer_auth=developer_auth,
+            corpus_search=developer_corpus_search,
         )
     if developer_harness == "claude-code":
         from tau2.hyper.harnesses.claude import ClaudeCodeSandboxBuilder

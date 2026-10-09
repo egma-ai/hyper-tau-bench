@@ -75,6 +75,8 @@ class NativeSandboxBuilder(ABC):
         self._client_ctx: Optional[ClientContext] = None
         self._live_experiment_ctx: Optional[LiveExperimentContext] = None
         self._sample_scenarios_ctx: Optional[SampleScenariosContext] = None
+        # Experiment switch: offer the search_corpus tool (see corpus_search).
+        self.corpus_search_enabled = False
 
     @property
     def gateway_model(self) -> str:
@@ -131,15 +133,17 @@ class NativeSandboxBuilder(ABC):
         include_client_tool: bool,
         include_live_experiment_tool: bool = False,
         include_sample_scenarios_tool: bool = False,
+        include_corpus_search_tool: bool = False,
     ) -> dict[str, str]:
         """Return private files written below the ephemeral runtime home."""
-        return {
-            self.runtime_config_path: self.render_runtime_config(
-                include_client_tool=include_client_tool,
-                include_live_experiment_tool=include_live_experiment_tool,
-                include_sample_scenarios_tool=include_sample_scenarios_tool,
-            )
+        tool_flags = {
+            "include_client_tool": include_client_tool,
+            "include_live_experiment_tool": include_live_experiment_tool,
+            "include_sample_scenarios_tool": include_sample_scenarios_tool,
         }
+        if include_corpus_search_tool:
+            tool_flags["include_corpus_search_tool"] = True
+        return {self.runtime_config_path: self.render_runtime_config(**tool_flags)}
 
     @abstractmethod
     def harness_command(self) -> list[str]:
@@ -151,7 +155,7 @@ class NativeSandboxBuilder(ABC):
 
     def runtime_environment(self, broker: CallbackBroker) -> dict[str, str]:
         """Environment inherited by the harness and callback MCP server."""
-        return {
+        environment = {
             "TAU2_CALLBACK_DIR": "/run/tau2-callback",
             "TAU2_CALLBACK_TOKEN": broker.token,
             "TAU2_CALLBACK_TIMEOUT_SECONDS": "28800",
@@ -163,6 +167,9 @@ class NativeSandboxBuilder(ABC):
                 "1" if getattr(broker, "sample_scenarios_tool_enabled", False) else "0"
             ),
         }
+        if getattr(broker, "corpus_search_tool_enabled", False):
+            environment["TAU2_CORPUS_SEARCH_TOOL_ENABLED"] = "1"
+        return environment
 
     def model_gateway_environment(self, spec: ModelGatewaySpec) -> dict[str, str]:
         """Environment injected only into the native harness process."""
@@ -226,11 +233,17 @@ class NativeSandboxBuilder(ABC):
             max_steps=budget.max_steps,
         )
         runtime: Optional[NativeSandboxRuntime] = None
+        corpus_search = None
+        if self.corpus_search_enabled:
+            from tau2.hyper.sandbox.corpus_search import CorpusSearch
+
+            corpus_search = CorpusSearch(kit_path)
         broker = CallbackBroker(
             kit_path,
             client_context=self._client_ctx,
             live_experiment_context=self._live_experiment_ctx,
             sample_scenarios_context=self._sample_scenarios_ctx,
+            corpus_search=corpus_search,
             response_phrasing_pack=self.response_phrasing_pack,
             local_test_wiring=self.local_test_wiring,
         )
@@ -284,15 +297,18 @@ class NativeSandboxBuilder(ABC):
                 )
                 runtime.start()
                 runtime.start_model_gateway(gateway_spec)
-                for path, contents in self.runtime_files(
-                    include_client_tool=broker.client_tool_enabled,
-                    include_live_experiment_tool=(
+                tool_flags = {
+                    "include_client_tool": broker.client_tool_enabled,
+                    "include_live_experiment_tool": (
                         getattr(broker, "live_experiment_tool_enabled", False)
                     ),
-                    include_sample_scenarios_tool=(
+                    "include_sample_scenarios_tool": (
                         getattr(broker, "sample_scenarios_tool_enabled", False)
                     ),
-                ).items():
+                }
+                if getattr(broker, "corpus_search_tool_enabled", False):
+                    tool_flags["include_corpus_search_tool"] = True
+                for path, contents in self.runtime_files(**tool_flags).items():
                     runtime.write_runtime_file(path, contents)
                 result.metadata["sandbox"] = runtime.runtime_metadata()
                 if display and hasattr(display, "show_sandbox_phase"):

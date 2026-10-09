@@ -4,7 +4,8 @@
 # which polls $H/state and collects $H/*.log and the run recording afterwards.
 #
 # Inputs (all under $H, written by the launcher before this starts):
-#   job.env           TASK_ID, BASE_COMMIT, REPO_URL, DEV_LLM, DEV_EFFORT, DEV_AUTH
+#   job.env           TASK_ID, BASE_COMMIT, REPO_URL, DEV_LLM, DEV_EFFORT, DEV_AUTH,
+#                     DEV_CORPUS_SEARCH (1 = the search_corpus experiment)
 #   branch.patch      `git diff --binary BASE_COMMIT` of the launcher's checkout
 #   dotenv            the repo .env (provider keys, TAU2_CHATGPT_AUTH_FILE)
 #   chatgpt-auth.json access token + account id only (when DEV_AUTH=chatgpt)
@@ -54,11 +55,21 @@ docker build -f docker/hyper-construction/Dockerfile \
     > "$H/build.log" 2>&1 || fail image-build
 
 state running
-uv run --frozen tau2 hyper-tau "$TASK_ID" \
+# The search_corpus experiment reads PDFs with pypdf in this host process
+# only; the Developer's construction image is unchanged.
+EXPERIMENT=""
+WITH=""
+if [ "${DEV_CORPUS_SEARCH:-0}" = 1 ]; then
+    EXPERIMENT="--developer-corpus-search"
+    WITH="--with pypdf"
+fi
+# shellcheck disable=SC2086 # $WITH and $EXPERIMENT are flag lists
+uv run --frozen $WITH tau2 hyper-tau "$TASK_ID" \
     --developer-harness codex \
     --developer-llm "$DEV_LLM" \
     --developer-reasoning-effort "$DEV_EFFORT" \
     --developer-auth "$DEV_AUTH" \
+    $EXPERIMENT \
     --no-display > "$H/run.log" 2>&1
 echo $? > "$H/exit_code"
 state done

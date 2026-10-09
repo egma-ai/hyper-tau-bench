@@ -14,8 +14,7 @@ construction image and runs the task.
 
 ## Requirements
 
-- A Daytona org with room for 4 vCPU / 8 GiB / 10 GiB per concurrent task
-  (Tier 3 runs all 53 release tasks at once).
+- A Daytona org with room for 4 vCPU / 16 GiB / 10 GiB per concurrent task.
 - `DAYTONA_API_KEY`, `OPENAI_API_KEY` and `OPENROUTER_API_KEY` in the
   environment or `.env`. The launcher writes the provider keys into each
   sandbox's `.env`; nothing is stored in sandbox metadata.
@@ -41,6 +40,19 @@ uv run --with "daytona>=0.210.0" python tools/daytona/launch.py \
   rebuilds the summary from `state.json`.
 - Every sandbox has a 12-hour wall-clock TTL, so an interrupted launcher can
   never leave sandboxes running indefinitely.
+- Scoring runs `--inner-workers` simulations in parallel (default 8, passed as
+  `TAU2_HYPER_INNER_MAX_WORKERS`), each in its own sealed candidate container.
+  tau2's own default of 32 got an 8 GiB sandbox OOM-killed at the start of
+  scoring, losing the finished build, so sandboxes default to 16 GiB
+  (`--memory-gb`). Measured during builds: about 0.2 of the 4 cores and
+  0.7 GiB of process memory on average; the rest of "used" memory is page
+  cache.
+- `--corpus-search` runs the search_corpus experiment: the Developer also
+  gets the `search_corpus` tool and its skill
+  (`src/tau2/hyper/harnesses/skills/search-corpus/SKILL.md`), which ask a
+  yes/no question of every task-material file through the OpenAI Decisions
+  API, billed to `OPENAI_API_KEY` (about $0.08 per call on a telecom corpus,
+  $0.35 on banking's 1,900 files).
 
 ## Billing the Developer to a ChatGPT plan
 

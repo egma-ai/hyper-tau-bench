@@ -17,6 +17,7 @@ if TYPE_CHECKING:
         LiveExperimentContext,
         SampleScenariosContext,
     )
+    from tau2.hyper.sandbox.corpus_search import CorpusSearch
 
 
 class CallbackBrokerError(RuntimeError):
@@ -47,6 +48,7 @@ class CallbackBroker:
         client_context: Optional[ClientContext] = None,
         live_experiment_context: Optional[LiveExperimentContext] = None,
         sample_scenarios_context: Optional[SampleScenariosContext] = None,
+        corpus_search: Optional[CorpusSearch] = None,
         response_phrasing_pack: Optional[Any] = None,
         local_test_wiring: Optional[Any] = None,
         max_local_tests: int = 50,
@@ -56,6 +58,7 @@ class CallbackBroker:
         self.client_context = client_context
         self.live_experiment_context = live_experiment_context
         self.sample_scenarios_context = sample_scenarios_context
+        self.corpus_search = corpus_search
         self.max_local_tests = max_local_tests
         self.local_tests_used = 0
         self.submitted = threading.Event()
@@ -85,6 +88,11 @@ class CallbackBroker:
     def sample_scenarios_tool_enabled(self) -> bool:
         """Whether the native harness should be offered the sample scenarios."""
         return self.sample_scenarios_context is not None
+
+    @property
+    def corpus_search_tool_enabled(self) -> bool:
+        """Whether the native harness should be offered ``search_corpus``."""
+        return self.corpus_search is not None
 
     def dispatch(self, *, token: str, tool: str, arguments: dict) -> str:
         """Authenticate and dispatch one callback tool invocation."""
@@ -145,6 +153,22 @@ class CallbackBroker:
                     if "quota" in str(exc):
                         raise CallbackQuotaError(str(exc)) from exc
                     raise
+
+            if tool == "search_corpus":
+                if self.corpus_search is None:
+                    raise CallbackBrokerError(
+                        "search_corpus is not available for this run"
+                    )
+                from tau2.hyper.sandbox.corpus_search import CorpusSearchQuotaError
+
+                try:
+                    return self.corpus_search.search(
+                        arguments.get("question"),
+                        min_probability=arguments.get("min_probability"),
+                        path=arguments.get("path"),
+                    )
+                except CorpusSearchQuotaError as exc:
+                    raise CallbackQuotaError(str(exc)) from exc
 
             if tool == "submit":
                 if self.submitted.is_set():
@@ -217,6 +241,11 @@ class CallbackBroker:
             "max_local_tests": self.max_local_tests,
             "local_tests_used": self.local_tests_used,
             "submitted": self.submitted.is_set(),
+            **(
+                {"corpus_search": self.corpus_search.usage()}
+                if self.corpus_search is not None
+                else {}
+            ),
         }
 
     def close(self) -> None:

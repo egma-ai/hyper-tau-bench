@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from tau2.hyper.harnesses.factory import DEVELOPER_AUTH_MODES
 from tau2.hyper.sandbox.builder import BuildStep
@@ -10,6 +11,10 @@ from tau2.hyper.sandbox.native_builder import NativeSandboxBuilder
 from tau2.hyper.sandbox.native_runtime import NativeProcessEvent
 
 CODEX_HARNESS_VERSION = "0.162.0"
+# Experiment add-on (--developer-corpus-search): a skill that explains the
+# search_corpus tool, installed where Codex discovers user skills.
+CORPUS_SEARCH_SKILL = Path(__file__).with_name("skills") / "search-corpus" / "SKILL.md"
+CORPUS_SEARCH_SKILL_PATH = "/runtime-home/.codex/skills/search-corpus/SKILL.md"
 
 
 class CodexSandboxBuilder(NativeSandboxBuilder):
@@ -20,8 +25,16 @@ class CodexSandboxBuilder(NativeSandboxBuilder):
     model_gateway_provider = "openai"
     runtime_config_path = "/runtime-home/.codex/config.toml"
 
-    def __init__(self, llm: str, *, developer_auth: str = "api-key", **kwargs):
+    def __init__(
+        self,
+        llm: str,
+        *,
+        developer_auth: str = "api-key",
+        corpus_search: bool = False,
+        **kwargs,
+    ):
         super().__init__(llm, **kwargs)
+        self.corpus_search_enabled = corpus_search
         if developer_auth not in DEVELOPER_AUTH_MODES:
             raise ValueError(
                 f"Unsupported developer auth {developer_auth!r}; "
@@ -59,6 +72,9 @@ class CodexSandboxBuilder(NativeSandboxBuilder):
             }
         if self.developer_auth == "chatgpt":
             metadata["developer_auth"] = "chatgpt-subscription"
+        if self.corpus_search_enabled:
+            metadata["extra_tools"] = ["search_corpus"]
+            metadata["extra_skills"] = ["search-corpus"]
         return metadata
 
     def runtime_environment(self, broker) -> dict[str, str]:
@@ -75,8 +91,11 @@ class CodexSandboxBuilder(NativeSandboxBuilder):
         include_client_tool: bool,
         include_live_experiment_tool: bool = False,
         include_sample_scenarios_tool: bool = False,
+        include_corpus_search_tool: bool = False,
     ) -> str:
         enabled_tools = ["run_local_test", "submit"]
+        if include_corpus_search_tool:
+            enabled_tools.insert(1, "search_corpus")
         if include_sample_scenarios_tool:
             enabled_tools.insert(1, "run_sample_scenarios")
         if include_live_experiment_tool:
@@ -142,8 +161,26 @@ class CodexSandboxBuilder(NativeSandboxBuilder):
             '"TAU2_CALLBACK_TIMEOUT_SECONDS", "TAU2_CLIENT_TOOL_ENABLED", '
             '"TAU2_LIVE_EXPERIMENT_TOOL_ENABLED", '
             '"TAU2_SAMPLE_SCENARIOS_TOOL_ENABLED", '
-            '"PATH", "PYTHONPATH", "TAU2_DATA_DIR"]\n'
+            + (
+                '"TAU2_CORPUS_SEARCH_TOOL_ENABLED", '
+                if include_corpus_search_tool
+                else ""
+            )
+            + '"PATH", "PYTHONPATH", "TAU2_DATA_DIR"]\n'
         )
+
+    def runtime_files(
+        self,
+        *,
+        include_corpus_search_tool: bool = False,
+        **tool_flags,
+    ) -> dict[str, str]:
+        files = super().runtime_files(
+            include_corpus_search_tool=include_corpus_search_tool, **tool_flags
+        )
+        if include_corpus_search_tool:
+            files[CORPUS_SEARCH_SKILL_PATH] = CORPUS_SEARCH_SKILL.read_text()
+        return files
 
     def harness_command(self) -> list[str]:
         return ["python", "-m", "tau2.hyper.harnesses.codex_driver"]
