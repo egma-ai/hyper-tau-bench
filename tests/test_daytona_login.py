@@ -101,3 +101,17 @@ def test_keeper_describes_a_login_without_its_tokens():
     assert status["expires_at"] == expires_at and 9.9 <= status["hours_left"] <= 10
     assert "secret-refresh" not in json.dumps(status)
     assert keeper_helper.describe(None) == {"logged_in": False}
+
+
+def test_usage_limit_is_read_from_harness_errors_only():
+    # Banking material talks about card usage limits; that is not the plan's.
+    material = (
+        "2026-10-09 10:41:37 | DEBUG | tau2.environment.environment:get_response - "
+        "Response: {'query': 'debit card daily usage limit', 'evidence': []}\n"
+    )
+    assert not launch.usage_limited(material)
+    stopped = material + (
+        "2026-10-09 13:02:11 | ERROR | tau2.hyper.sandbox.native_builder:build - "
+        "Native codex harness error: exit_code=1 error_frames=['usage_limit_reached']\n"
+    )
+    assert launch.usage_limited(stopped)

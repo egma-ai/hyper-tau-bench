@@ -57,6 +57,21 @@ SANDBOX_TTL_MINUTES = 12 * 60
 # A sandbox's ChatGPT token must outlive the sandbox.
 MIN_TOKEN_HOURS = SANDBOX_TTL_MINUTES / 60 + 1
 USAGE_LIMIT_MARKERS = ("usage limit", "usage_limit", "rate_limit_exceeded")
+# Log lines where the Developer harness reports why it stopped. Task material
+# and simulated conversations mention "usage limits" too (a card's limit), so
+# only these lines can show that the plan's usage limit ended a build.
+HARNESS_ERROR_MARKERS = ("harness error", "harness failed")
+
+
+def usage_limited(run_log: str) -> bool:
+    """Whether the Developer harness stopped on a usage-limit error."""
+    return any(
+        marker in line
+        for line in run_log.lower().splitlines()
+        if any(anchor in line for anchor in HARNESS_ERROR_MARKERS)
+        for marker in USAGE_LIMIT_MARKERS
+    )
+
 
 _print_lock = threading.Lock()
 _state_lock = threading.Lock()
@@ -368,20 +383,19 @@ def run_one(daytona, args, state: RunState, task_id: str, inputs, job_base) -> N
 
         recordings = collect(sandbox, task_dir)
         result = score(recordings)
-        run_log = (task_dir / "run.log").read_text(errors="replace").lower()
-        usage_limited = any(marker in run_log for marker in USAGE_LIMIT_MARKERS)
+        limited = usage_limited((task_dir / "run.log").read_text(errors="replace"))
         status = "done" if result else "failed"
         state.update(
             task_id,
             status=status,
             finished_at=datetime.now(timezone.utc).isoformat(),
-            usage_limited=usage_limited,
+            usage_limited=limited,
             **result,
         )
         log(
             f"{task_id[:3]} {status}"
             + (f" reward={result['reward']:.3f}" if result else f" ({last_state})")
-            + (" [usage limit hit]" if usage_limited else "")
+            + (" [usage limit hit]" if limited else "")
         )
     except Exception as exc:  # noqa: BLE001 - record and move on
         state.update(task_id, status="failed", error=f"{type(exc).__name__}: {exc}")
