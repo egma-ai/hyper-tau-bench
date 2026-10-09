@@ -27,8 +27,13 @@ docker info > /dev/null 2>&1 || fail dockerd
 
 state installing
 # psutil has no musl wheel, so the host venv needs a compiler and headers.
+# Scoring banking_knowledge tasks builds the knowledge-base shell tool on the
+# host, which needs Anthropic's sandbox-runtime (srt) plus rg, bwrap, socat.
 apk add --no-cache bash git curl python3 python3-dev build-base linux-headers \
+    ripgrep bubblewrap socat nodejs npm \
     >> "$H/runner.log" 2>&1 || fail apk
+npm install -g @anthropic-ai/sandbox-runtime@0.0.23 >> "$H/runner.log" 2>&1 \
+    || fail sandbox-runtime
 curl -LsSf https://astral.sh/uv/install.sh \
     | env UV_INSTALL_DIR=/usr/local/bin INSTALLER_NO_MODIFY_PATH=1 sh \
     >> "$H/runner.log" 2>&1 || fail uv-install
