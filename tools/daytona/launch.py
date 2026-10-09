@@ -489,8 +489,8 @@ def main() -> None:
     parser.add_argument(
         "--memory-gb",
         type=int,
-        default=16,
-        help="sandbox memory; 8 GiB was OOM-killed by 32-wide scoring",
+        default=8,
+        help="sandbox memory (Daytona allows at most 8 GiB per sandbox)",
     )
     parser.add_argument(
         "--inner-workers",
