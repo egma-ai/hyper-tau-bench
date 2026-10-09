@@ -203,3 +203,43 @@ def test_maintained_tasks_pin_the_construction_runtime_image():
         image = task.get("sandbox_config", {}).get("docker_image")
         if image is not None:
             assert not image.endswith(":latest"), path
+
+
+def test_chatgpt_gateway_gets_the_login_as_a_read_only_mount(tmp_path, monkeypatch):
+    from tau2.hyper.sandbox.model_gateway import SIDECAR_CHATGPT_AUTH_PATH
+
+    runtime = NativeSandboxRuntime(tmp_path)
+    runtime._started = True
+    calls = []
+
+    def fake_docker(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(runtime, "_docker_command", fake_docker)
+    login = tmp_path / "auth.json"
+    login.write_text("{}")
+    spec = ModelGatewaySpec(
+        provider="chatgpt",
+        model="gpt-6.1-sol",
+        token="scoped-token",
+        upstream_api_key="",
+        expires_at=9999999999,
+        auth_file=str(login),
+    )
+
+    runtime.start_model_gateway(spec)
+
+    create = calls[0][0]
+    mount = create[create.index("--mount") + 1]
+    assert mount == (
+        f"type=bind,source={login.resolve()},target={SIDECAR_CHATGPT_AUTH_PATH},"
+        "readonly"
+    )
+    # The Developer's own container never receives the login.
+    developer = runtime.config.container_command(
+        kit_dir=tmp_path,
+        container_name="developer",
+        network_name="net",
+    )
+    assert str(login) not in " ".join(developer)

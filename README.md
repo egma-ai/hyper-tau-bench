@@ -103,6 +103,18 @@ harnesses `opencode` and `prime-agent`. All run in the same pinned container
 with no general internet route. Adding a harness means implementing one
 driver class in `src/tau2/hyper/harnesses/`.
 
+Prime Agent is opt-in in the construction image: its installer moved to a
+release layout the image does not handle yet, so build with
+`--build-arg INSTALL_PRIME_AGENT=1` only once that is fixed.
+
+With the `codex` harness, `--developer-auth chatgpt` bills the Developer's
+model calls to a ChatGPT plan instead of an API key: point
+`TAU2_CHATGPT_AUTH_FILE` at a Codex login (`auth.json`) and the model gateway
+serves Codex through the ChatGPT backend, keeping the login out of the
+Developer's container. Only the Developer seat moves; the other seats still
+use API keys. [`tools/daytona/`](tools/daytona/README.md) runs tasks in
+parallel on Daytona sandboxes, with this mode or with API keys.
+
 ## API keys and model access
 
 A τ^τ run calls models in four seats. In the shipped configuration two keys

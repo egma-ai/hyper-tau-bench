@@ -29,6 +29,8 @@ previously recorded results.
 
 from typing import Optional
 
+from tau2.config import OPENAI_REASONING_MODEL_PREFIXES
+
 # The Developer seat. Not task-configurable; set with
 # `tau2 hyper-tau --developer-llm`.
 DEFAULT_DEVELOPER_LLM = "gpt-5.4"
@@ -53,11 +55,12 @@ def supports_reasoning_effort(model: str) -> bool:
     """Whether ``reasoning_effort`` is a valid argument for ``model``.
 
     Mirrors the model-family split the CLI applies when building LLM args:
-    the gpt-5 family takes ``reasoning_effort``, Anthropic models take a
-    thinking budget instead, and older OpenAI models take neither. Guards the
-    seat defaults above so they are never sent to a model that rejects them.
+    the gpt-5 and gpt-6 families take ``reasoning_effort``, Anthropic models
+    take a thinking budget instead, and older OpenAI models take neither.
+    Guards the seat defaults above so they are never sent to a model that
+    rejects them.
     """
-    return model.startswith("gpt-5")
+    return model.startswith(OPENAI_REASONING_MODEL_PREFIXES)
 
 
 def resolve_simulator_llm_args(

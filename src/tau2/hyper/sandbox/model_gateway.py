@@ -16,7 +16,8 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import ClassVar
+from pathlib import Path
+from typing import ClassVar, Optional
 from urllib.parse import unquote, urlsplit
 
 import httpx
@@ -35,6 +36,10 @@ _PROVIDER_ORIGINS = {
     "openai": "https://api.openai.com/v1",
     "anthropic": "https://api.anthropic.com/v1",
     "openrouter": "https://openrouter.ai/api/v1",
+    # Codex's ChatGPT-plan backend: bills the Developer seat to a ChatGPT
+    # subscription instead of an API key. Its credential is a Codex login
+    # file (CHATGPT_AUTH_FILE_ENV), not a key variable.
+    "chatgpt": "https://chatgpt.com/backend-api/codex",
 }
 _PROVIDER_KEY_ENV = {
     "openai": "OPENAI_API_KEY",
@@ -47,8 +52,15 @@ _PROVIDER_WIRE = {
     "openai": "openai",
     "anthropic": "anthropic",
     "openrouter": "openai",
+    "chatgpt": "openai",
 }
 _GATEWAY_WIRES = ("openai", "anthropic")
+
+# Host path of a Codex ChatGPT login (an ``auth.json`` written by
+# ``codex login``). It is bind-mounted read-only into the sidecar alone and
+# re-read on every request, so whoever owns the login can refresh it in place.
+CHATGPT_AUTH_FILE_ENV = "TAU2_CHATGPT_AUTH_FILE"
+SIDECAR_CHATGPT_AUTH_PATH = "/run/tau2-gateway/chatgpt-auth.json"
 
 
 def _wire_for(provider: str) -> str:
@@ -80,6 +92,21 @@ _REQUEST_HEADERS = {
     "user-agent",
     "x-client-request-id",
 }
+# Codex client headers the ChatGPT backend reads (session and client
+# identification); forwarded only to that backend.
+_CHATGPT_REQUEST_HEADERS = {"conversation_id", "originator", "session_id", "version"}
+
+
+def _read_chatgpt_credentials(path: str) -> tuple[str, Optional[str]]:
+    """Return ``(access_token, account_id)`` from a Codex ``auth.json``."""
+    try:
+        tokens = json.loads(Path(path).read_text()).get("tokens") or {}
+    except (OSError, ValueError, AttributeError) as exc:
+        raise ValueError(f"Unreadable ChatGPT login file: {type(exc).__name__}")
+    access_token = tokens.get("access_token")
+    if not access_token:
+        raise ValueError("ChatGPT login file has no access token")
+    return access_token, tokens.get("account_id")
 
 
 @contextmanager
@@ -223,6 +250,8 @@ class ModelGatewaySpec:
     # built-in origin / wire for ``provider``.
     upstream_origin: str | None = None
     wire: str | None = None
+    # Host path of the Codex ChatGPT login the ``chatgpt`` provider bills to.
+    auth_file: str | None = field(default=None, repr=False)
 
     @classmethod
     def from_host_environment(
@@ -237,6 +266,10 @@ class ModelGatewaySpec:
         if lifetime_seconds <= 0:
             raise ValueError("Model gateway lifetime must be positive")
         load_dotenv()
+        if provider == "chatgpt":
+            return cls._from_chatgpt_login(
+                model=model, lifetime_seconds=lifetime_seconds
+            )
         # Imported lazily: this module is also the sidecar entrypoint inside
         # the construction image, which only reads its environment.
         from tau2.utils.model_routing import ModelRoutingError, provider_settings
@@ -304,10 +337,41 @@ class ModelGatewaySpec:
             ),
         )
 
+    @classmethod
+    def _from_chatgpt_login(
+        cls, *, model: str, lifetime_seconds: float
+    ) -> ModelGatewaySpec:
+        """Bill the Developer seat to the ChatGPT plan behind a Codex login."""
+        auth_file = os.environ.get(CHATGPT_AUTH_FILE_ENV)
+        if not auth_file:
+            raise RuntimeError(
+                f"{CHATGPT_AUTH_FILE_ENV} must point at a Codex ChatGPT login "
+                "(auth.json) for the chatgpt developer gateway"
+            )
+        auth_path = str(Path(auth_file).expanduser().resolve())
+        # Fail on the host, before any container starts, if it is unusable.
+        _read_chatgpt_credentials(auth_path)
+        return cls(
+            provider="chatgpt",
+            model=model,
+            token=secrets.token_urlsafe(32),
+            upstream_api_key="",
+            expires_at=time.time() + lifetime_seconds,
+            upstream_origin=_PROVIDER_ORIGINS["chatgpt"],
+            wire="openai",
+            auth_file=auth_path,
+        )
+
     @property
     def base_url(self) -> str:
         """Internal URL visible to the selected native harness."""
         return f"http://{MODEL_GATEWAY_HOST}:{MODEL_GATEWAY_PORT}/{self.provider}"
+
+    def sidecar_mounts(self) -> list[tuple[str, str]]:
+        """Host files bind-mounted read-only into the sidecar, never the harness."""
+        if not self.auth_file:
+            return []
+        return [(self.auth_file, SIDECAR_CHATGPT_AUTH_PATH)]
 
     def sidecar_environment(self) -> dict[str, str]:
         """Return environment passed only to the gateway sidecar."""
@@ -332,6 +396,8 @@ class ModelGatewaySpec:
             environment["TAU2_MODEL_GATEWAY_UPSTREAM_ORIGIN"] = self.upstream_origin
         if self.wire:
             environment["TAU2_MODEL_GATEWAY_WIRE"] = self.wire
+        if self.auth_file:
+            environment["TAU2_MODEL_GATEWAY_AUTH_FILE"] = SIDECAR_CHATGPT_AUTH_PATH
         return environment
 
     @property
@@ -346,6 +412,7 @@ class ModelGatewaySpec:
         """Return the non-secret gateway contract stored with a run."""
         families = {
             "openai": ["responses", "models"],
+            "chatgpt": ["responses", "models"],
             "openrouter": ["responses", "chat/completions", "models"],
             "anthropic": ["messages", "messages/count_tokens", "models"],
         }.get(self.provider) or {
@@ -364,6 +431,11 @@ class ModelGatewaySpec:
             **(
                 {"openrouter_provider_prefs": self.provider_prefs}
                 if self.provider_prefs
+                else {}
+            ),
+            **(
+                {"upstream_credential": "chatgpt-subscription-login"}
+                if self.auth_file
                 else {}
             ),
         }
@@ -385,6 +457,7 @@ class ModelGatewayRequestHandler(BaseHTTPRequestHandler):
     provider_prefs: ClassVar[dict | None]
     upstream_origin: ClassVar[str]
     wire: ClassVar[str]
+    auth_file: ClassVar[str | None] = None
     client: ClassVar[httpx.Client]
 
     def log_message(self, format: str, *args) -> None:
@@ -409,6 +482,39 @@ class ModelGatewayRequestHandler(BaseHTTPRequestHandler):
             hmac.compare_digest(bearer, self.token)
             or hmac.compare_digest(api_key, self.token)
         )
+
+    def _upstream_headers(self) -> dict[str, str]:
+        """Allowlisted client headers plus the upstream credential.
+
+        Raises ValueError when a ChatGPT login file cannot supply a token.
+        """
+        headers = {
+            key: value
+            for key, value in self.headers.items()
+            if key.lower() in _REQUEST_HEADERS or key.lower().startswith("x-stainless-")
+        }
+        if self.auth_file:
+            headers.update(
+                {
+                    key: value
+                    for key, value in self.headers.items()
+                    if key.lower() in _CHATGPT_REQUEST_HEADERS
+                    or key.lower().startswith("x-codex-")
+                }
+            )
+            access_token, account_id = _read_chatgpt_credentials(self.auth_file)
+            headers["Authorization"] = f"Bearer {access_token}"
+            if account_id:
+                headers["ChatGPT-Account-Id"] = account_id
+        elif self.wire == "openai":
+            headers["Authorization"] = f"Bearer {self.upstream_api_key}"
+            if self.upstream_organization:
+                headers["OpenAI-Organization"] = self.upstream_organization
+            if self.upstream_project:
+                headers["OpenAI-Project"] = self.upstream_project
+        else:
+            headers["x-api-key"] = self.upstream_api_key
+        return headers
 
     def _send_json(self, status: int, payload: dict) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode()
@@ -465,19 +571,13 @@ class ModelGatewayRequestHandler(BaseHTTPRequestHandler):
         ):
             body = _rewrite_openrouter_body(body, self.provider_prefs)
 
-        headers = {
-            key: value
-            for key, value in self.headers.items()
-            if key.lower() in _REQUEST_HEADERS or key.lower().startswith("x-stainless-")
-        }
-        if self.wire == "openai":
-            headers["Authorization"] = f"Bearer {self.upstream_api_key}"
-            if self.upstream_organization:
-                headers["OpenAI-Organization"] = self.upstream_organization
-            if self.upstream_project:
-                headers["OpenAI-Project"] = self.upstream_project
-        else:
-            headers["x-api-key"] = self.upstream_api_key
+        try:
+            headers = self._upstream_headers()
+        except ValueError as exc:
+            self._send_json(
+                502, {"error": "gateway credential unavailable", "detail": str(exc)}
+            )
+            return
 
         upstream_url = f"{self.upstream_origin}/{upstream_path}"
         if parsed.query:
@@ -548,6 +648,7 @@ def _handler_from_environment() -> type[ModelGatewayRequestHandler]:
     )
     prefs_raw = os.environ.get("TAU2_MODEL_GATEWAY_PROVIDER_PREFS")
     ConfiguredHandler.provider_prefs = json.loads(prefs_raw) if prefs_raw else None
+    ConfiguredHandler.auth_file = os.environ.get("TAU2_MODEL_GATEWAY_AUTH_FILE")
     ConfiguredHandler.client = httpx.Client(
         timeout=httpx.Timeout(connect=30, read=None, write=60, pool=30),
         follow_redirects=False,

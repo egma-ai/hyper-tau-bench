@@ -61,6 +61,14 @@ def test_empty_manifest_is_litellm_prefix_convention(monkeypatch):
     assert gemini.request_kwargs() == {"api_key": "k-gem"}
 
 
+def test_gpt6_ids_on_openai_use_the_responses_api(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "k-openai")
+    route = parse_routing({}).resolve("gpt-6.1-sol")
+
+    assert route.provider.name == "openai"
+    assert route.uses_responses_api
+
+
 def test_unknown_litellm_prefix_passes_through_untouched():
     route = parse_routing({}).resolve("vertex_ai/gemini-3-pro")
     assert route.provider is None

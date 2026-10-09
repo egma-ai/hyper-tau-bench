@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 
+from tau2.hyper.harnesses.factory import DEVELOPER_AUTH_MODES
 from tau2.hyper.sandbox.builder import BuildStep
 from tau2.hyper.sandbox.native_builder import NativeSandboxBuilder
 from tau2.hyper.sandbox.native_runtime import NativeProcessEvent
 
-CODEX_HARNESS_VERSION = "0.144.6"
+CODEX_HARNESS_VERSION = "0.162.0"
 
 
 class CodexSandboxBuilder(NativeSandboxBuilder):
@@ -19,8 +20,21 @@ class CodexSandboxBuilder(NativeSandboxBuilder):
     model_gateway_provider = "openai"
     runtime_config_path = "/runtime-home/.codex/config.toml"
 
+    def __init__(self, llm: str, *, developer_auth: str = "api-key", **kwargs):
+        super().__init__(llm, **kwargs)
+        if developer_auth not in DEVELOPER_AUTH_MODES:
+            raise ValueError(
+                f"Unsupported developer auth {developer_auth!r}; "
+                f"choose from {list(DEVELOPER_AUTH_MODES)}"
+            )
+        self.developer_auth = developer_auth
+        if developer_auth == "chatgpt":
+            # Codex still talks only to the gateway; the gateway's chatgpt
+            # provider bills the calls to a ChatGPT plan.
+            self.model_gateway_provider = "chatgpt"
+
     def harness_config_metadata(self) -> dict:
-        return {
+        metadata = {
             "interface": "app-server-stdio",
             "approval_policy": "never",
             "inner_sandbox": "danger-full-access",
@@ -28,11 +42,24 @@ class CodexSandboxBuilder(NativeSandboxBuilder):
             "apps": False,
             "multi_agent": False,
             "memory": False,
+            "bundled_skills": False,
             "history_persistence": "none",
             "model_gateway": "provider-only/per-run/model-scoped",
             "gateway_token_inherited_by_shell": False,
             "mcp_servers": ["hyper_tau"],
         }
+        if self.llm.startswith("gpt-6"):
+            # Codex's built-in profile for GPT-6 models fixes these regardless
+            # of the [features] table: every tool is called from a JavaScript
+            # `exec` tool, and sub-agent tools are offered, but Codex tells the
+            # model not to spawn agents unless asked (any effort below ultra).
+            metadata["model_profile"] = {
+                "code_mode": True,
+                "subagent_tools": "offered/explicit-request-only",
+            }
+        if self.developer_auth == "chatgpt":
+            metadata["developer_auth"] = "chatgpt-subscription"
+        return metadata
 
     def runtime_environment(self, broker) -> dict[str, str]:
         environment = super().runtime_environment(broker)
@@ -83,7 +110,8 @@ class CodexSandboxBuilder(NativeSandboxBuilder):
             'exclude = ["TAU2_MODEL_GATEWAY_TOKEN"]\n'
             "\n[model_providers.tau2_gateway]\n"
             'name = "Hyper-tau model gateway"\n'
-            'base_url = "http://tau2-model-gateway:8143/openai/v1"\n'
+            f'base_url = "http://tau2-model-gateway:8143/'
+            f'{self.model_gateway_provider}/v1"\n'
             'env_key = "TAU2_MODEL_GATEWAY_TOKEN"\n'
             'wire_api = "responses"\n'
             "supports_websockets = false\n"
@@ -99,6 +127,8 @@ class CodexSandboxBuilder(NativeSandboxBuilder):
             "skill_mcp_dependency_install = false\n"
             "shell_tool = true\n"
             "\n[feedback]\n"
+            "enabled = false\n"
+            "\n[skills.bundled]\n"
             "enabled = false\n"
             "\n[mcp_servers.hyper_tau]\n"
             'command = "/opt/tau2/.venv/bin/python"\n'

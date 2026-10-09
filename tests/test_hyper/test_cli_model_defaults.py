@@ -114,6 +114,35 @@ def test_hyper_tau_llm_args_require_model_for_constraint_override():
         cli._build_hyper_tau_llm_args(None, "medium", None)
 
 
+def test_hyper_tau_llm_args_cover_gpt6_reasoning_models():
+    assert cli._build_hyper_tau_llm_args("gpt-6.1-sol", "max", None) == {
+        "reasoning_effort": "max"
+    }
+    assert cli._build_hyper_tau_llm_args("gpt-4.1", "high", None) is None
+
+
+def test_hyper_tau_cli_accepts_max_developer_effort(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "tau2",
+            "hyper-tau",
+            TELECOM_TASK_ID,
+            "--developer-llm",
+            "gpt-6.1-sol",
+            "--developer-reasoning-effort",
+            "max",
+        ],
+    )
+    monkeypatch.setattr(cli, "run_hyper_tau", lambda args: captured.update(vars(args)))
+
+    cli.main()
+
+    assert captured["developer_reasoning_effort"] == "max"
+
+
 def test_hyper_tau_cli_does_not_override_task_client_model(monkeypatch):
     """--client-llm must default to None so a task's client_llm pin wins."""
     captured = {}

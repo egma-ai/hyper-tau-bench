@@ -39,6 +39,7 @@ def test_codex_builder_identity_is_harness_plus_model():
             "apps": False,
             "multi_agent": False,
             "memory": False,
+            "bundled_skills": False,
             "history_persistence": "none",
             "model_gateway": "provider-only/per-run/model-scoped",
             "gateway_token_inherited_by_shell": False,
@@ -49,6 +50,19 @@ def test_codex_builder_identity_is_harness_plus_model():
         "model": "gpt-5.4",
         "reasoning_effort": "high",
     }
+
+
+def test_codex_records_the_gpt6_tool_profile():
+    """GPT-6 runs record what Codex's model profile turns on regardless."""
+    config = CodexSandboxBuilder("gpt-6.1-sol").harness_config_metadata()
+
+    assert config["model_profile"] == {
+        "code_mode": True,
+        "subagent_tools": "offered/explicit-request-only",
+    }
+    assert (
+        "model_profile" not in CodexSandboxBuilder("gpt-5.4").harness_config_metadata()
+    )
 
 
 def test_codex_builder_honors_preexisting_cancellation(tmp_path):
@@ -83,6 +97,7 @@ def test_codex_config_disables_non_benchmark_capabilities():
     assert "allow_login_shell = false" in config
     assert "apps = false" in config
     assert "multi_agent = false" in config
+    assert "[skills.bundled]\nenabled = false" in config
     assert 'persistence = "none"' in config
     assert "required = true" in config
     assert 'enabled_tools = ["run_local_test", "submit"]' in config
@@ -221,3 +236,24 @@ def test_native_builder_enforces_positive_step_limit(tmp_path, monkeypatch):
     assert result.done_reason == "max_steps"
     assert result.total_steps == 2
     assert [step.content for step in result.steps] == ["step 1", "step 2"]
+
+
+def test_codex_chatgpt_auth_routes_through_the_gateway_chatgpt_provider():
+    builder = CodexSandboxBuilder("gpt-6.1-sol", developer_auth="chatgpt")
+
+    assert builder.model_gateway_provider == "chatgpt"
+    config = builder.render_runtime_config(include_client_tool=False)
+    assert 'base_url = "http://tau2-model-gateway:8143/chatgpt/v1"' in config
+    assert 'env_key = "TAU2_MODEL_GATEWAY_TOKEN"' in config
+    assert builder.harness_config_metadata()["developer_auth"] == (
+        "chatgpt-subscription"
+    )
+    # The default stays on the API-key provider.
+    assert CodexSandboxBuilder("gpt-6.1-sol").model_gateway_provider == "openai"
+
+
+def test_codex_rejects_unknown_developer_auth():
+    import pytest
+
+    with pytest.raises(ValueError, match="Unsupported developer auth"):
+        CodexSandboxBuilder("gpt-6.1-sol", developer_auth="cookie")

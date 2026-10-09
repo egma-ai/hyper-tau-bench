@@ -42,6 +42,10 @@ DEFAULT_RETRY_MIN_WAIT = 1.0  # seconds
 DEFAULT_RETRY_MAX_WAIT = 10.0  # seconds
 DEFAULT_RETRY_MULTIPLIER = 1.0  # exponential backoff multiplier
 
+# OpenAI reasoning-model families: they take ``reasoning_effort`` and, on a
+# native OpenAI endpoint, go through the Responses API.
+OPENAI_REASONING_MODEL_PREFIXES = ("gpt-5", "gpt-6")
+
 # LiteLLM cache
 LLM_CACHE_ENABLED = False
 DEFAULT_LLM_CACHE_TYPE = "redis"

@@ -3,9 +3,14 @@ FROM node:24-bookworm-slim AS node-runtime
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 ARG TAU2_SOURCE_REVISION=unknown
-ARG CODEX_VERSION=0.144.6
+ARG CODEX_VERSION=0.162.0
 ARG CLAUDE_CODE_VERSION=2.1.219
 ARG OPENCODE_VERSION=1.18.23
+# Prime Agent is opt-in. Its install script now ships a release layout the
+# steps below do not handle (no npm runtime package for the kernel venv), so
+# installing it fails the build; the other harnesses do not need it. Build
+# with --build-arg INSTALL_PRIME_AGENT=1 once those steps are updated.
+ARG INSTALL_PRIME_AGENT=0
 
 LABEL org.opencontainers.image.revision="${TAU2_SOURCE_REVISION}"
 
@@ -68,10 +73,12 @@ RUN git config --system init.defaultBranch main \
 # Prime Agent ships through its versioned install script (sha256-verified
 # release download). The script must leave `prime-agent` on PATH; the
 # version-check RUN at the bottom fails the build visibly if it does not.
-RUN curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh \
-    && { command -v prime-agent \
-         || ln -s "$(find /root -maxdepth 4 -name prime-agent -type f \
-                     2>/dev/null | head -1)" /usr/local/bin/prime-agent; }
+RUN if [ "$INSTALL_PRIME_AGENT" = "1" ]; then \
+        curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh \
+        && { command -v prime-agent \
+             || ln -s "$(find /root -maxdepth 4 -name prime-agent -type f \
+                         2>/dev/null | head -1)" /usr/local/bin/prime-agent; }; \
+    fi
 
 # Prime routes every tool (ipython, filesystem, shell, MCP) through a Python
 # kernel it normally bootstraps by downloading Python 3.11 + PyPI packages on
@@ -80,15 +87,17 @@ RUN curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh \
 # PrimeAgentSandboxBuilder). Requirement list mirrors the pinned release's
 # bootstrapVenv: ipykernel + bundled prime-agent-runtime + dill (state
 # snapshots) + its default extra packages.
-RUN UV_PYTHON_INSTALL_DIR=/opt/uv-python uv python install 3.11 \
-    && UV_PYTHON_INSTALL_DIR=/opt/uv-python \
-       uv venv /opt/prime-kernel --python 3.11 --seed \
-    && uv pip install --python /opt/prime-kernel/bin/python \
-       ipykernel dill \
-       /usr/local/lib/node_modules/prime-agent/dist/prime-agent-runtime \
-       requests httpx pyyaml tomli python-dotenv pandas numpy scipy \
-       beautifulsoup4 lxml pydantic tyro \
-    && uv cache clean
+RUN if [ "$INSTALL_PRIME_AGENT" = "1" ]; then \
+        UV_PYTHON_INSTALL_DIR=/opt/uv-python uv python install 3.11 \
+        && UV_PYTHON_INSTALL_DIR=/opt/uv-python \
+           uv venv /opt/prime-kernel --python 3.11 --seed \
+        && uv pip install --python /opt/prime-kernel/bin/python \
+           ipykernel dill \
+           /usr/local/lib/node_modules/prime-agent/dist/prime-agent-runtime \
+           requests httpx pyyaml tomli python-dotenv pandas numpy scipy \
+           beautifulsoup4 lxml pydantic tyro \
+        && uv cache clean; \
+    fi
 
 WORKDIR /opt/tau2
 
@@ -147,7 +156,7 @@ WORKDIR /workspace
 RUN codex --version \
     && claude --version \
     && opencode --version \
-    && prime-agent --version \
+    && { [ "$INSTALL_PRIME_AGENT" != "1" ] || prime-agent --version; } \
     && git --version \
     && rg --version \
     && tree --version \

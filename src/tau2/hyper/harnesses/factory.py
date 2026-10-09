@@ -9,6 +9,9 @@ if TYPE_CHECKING:
 
 DEFAULT_DEVELOPER_HARNESS = "codex"
 DEVELOPER_HARNESSES = ("codex", "claude-code", "opencode", "prime-agent")
+# How the Developer seat's model calls are billed: an API key (default), or a
+# ChatGPT plan through a Codex login (codex harness only).
+DEVELOPER_AUTH_MODES = ("api-key", "chatgpt")
 
 
 def create_developer_builder(
@@ -16,16 +19,25 @@ def create_developer_builder(
     developer_llm: str,
     developer_llm_args: dict | None,
     developer_reasoning_effort: str | None,
+    developer_auth: str = "api-key",
 ) -> SandboxBuilder:
     """Build the selected coding-agent integration for a construction run."""
     native_llm_args = dict(developer_llm_args or {})
     if developer_reasoning_effort and developer_reasoning_effort != "none":
         native_llm_args["reasoning_effort"] = developer_reasoning_effort
+    if developer_auth != "api-key" and developer_harness != "codex":
+        raise ValueError(
+            f"Developer auth {developer_auth!r} is only supported by the codex harness"
+        )
 
     if developer_harness == "codex":
         from tau2.hyper.harnesses.codex import CodexSandboxBuilder
 
-        return CodexSandboxBuilder(llm=developer_llm, llm_args=developer_llm_args or {})
+        return CodexSandboxBuilder(
+            llm=developer_llm,
+            llm_args=native_llm_args,
+            developer_auth=developer_auth,
+        )
     if developer_harness == "claude-code":
         from tau2.hyper.harnesses.claude import ClaudeCodeSandboxBuilder
 

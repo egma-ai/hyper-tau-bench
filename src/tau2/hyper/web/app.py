@@ -30,6 +30,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
 from loguru import logger
 from pydantic import BaseModel
 
+from tau2.hyper.run_defaults import supports_reasoning_effort
 from tau2.hyper.runtime_contract import DEFAULT_CONSTRUCTION_RUNTIME_IMAGE
 from tau2.hyper.task_loader import (
     LegacyHyperTauDomainError,
@@ -888,14 +889,14 @@ def _build_llm_args(
 ) -> dict | None:
     """Build LLM args dict from reasoning parameters.
 
-    - OpenAI reasoning models (gpt-5.*): use ``reasoning_effort``.
+    - OpenAI reasoning models (gpt-5.*, gpt-6.*): use ``reasoning_effort``.
     - Anthropic models (claude-*): use ``thinking`` with ``budget_tokens``.
 
     Returns None if no reasoning parameters are set.
     """
     args: dict = {}
 
-    if reasoning_effort and model.startswith("gpt-5"):
+    if reasoning_effort and supports_reasoning_effort(model):
         args["reasoning_effort"] = reasoning_effort
 
     if thinking_budget and "claude" in model:

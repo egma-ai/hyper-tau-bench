@@ -42,6 +42,7 @@ from tau2.data_model.simulation import (
 from tau2.domains.banking_knowledge.retrieval import get_all_variant_names
 from tau2.hyper.harnesses.factory import (
     DEFAULT_DEVELOPER_HARNESS,
+    DEVELOPER_AUTH_MODES,
     DEVELOPER_HARNESSES,
     create_developer_builder,
 )
@@ -49,7 +50,9 @@ from tau2.hyper.run_defaults import (
     DEFAULT_CLIENT_LLM,
     DEFAULT_CLIENT_REASONING_EFFORT,
     DEFAULT_DEVELOPER_LLM,
+    supports_reasoning_effort,
 )
+from tau2.hyper.sandbox.model_gateway import CHATGPT_AUTH_FILE_ENV
 from tau2.run import get_options, run_domain
 from tau2.runner.work import parse_provider_limits
 
@@ -992,10 +995,11 @@ def main():
         "--developer-reasoning-effort",
         type=str,
         default="medium",
-        choices=["none", "low", "medium", "high", "xhigh"],
+        choices=["none", "low", "medium", "high", "xhigh", "max"],
         help=(
             "Reasoning effort for the Developer model/harness. Default: medium. "
-            "Supported native harnesses pass this to their own CLI."
+            "Supported native harnesses pass this to their own CLI. 'max' is "
+            "only accepted by models that offer it (e.g. gpt-6.1-sol)."
         ),
     )
     hyper_tau_parser.add_argument(
@@ -1100,6 +1104,18 @@ def main():
             "selected separately with --developer-llm. Use 'codex' (default), "
             "'claude-code', or the open-source harnesses 'opencode' and "
             "'prime-agent'."
+        ),
+    )
+    hyper_tau_parser.add_argument(
+        "--developer-auth",
+        choices=DEVELOPER_AUTH_MODES,
+        default="api-key",
+        help=(
+            "How the Developer's model calls are billed. 'api-key' (default) "
+            "uses the provider key from model_routing.toml. 'chatgpt' (codex "
+            "harness only) bills a ChatGPT plan through the Codex login file "
+            f"named by {CHATGPT_AUTH_FILE_ENV}; the login stays in the model "
+            "gateway and never enters the Developer's container."
         ),
     )
     hyper_tau_parser.add_argument(
@@ -1405,7 +1421,7 @@ def _build_hyper_tau_llm_args(
 ) -> dict | None:
     """Build LLM args dict from reasoning parameters for Hyper-τ models.
 
-    - OpenAI reasoning models (gpt-5.*): use ``reasoning_effort``.
+    - OpenAI reasoning models (gpt-5.*, gpt-6.*): use ``reasoning_effort``.
     - Anthropic models (claude-*): use ``thinking`` with ``budget_tokens``.
 
     Returns None if no reasoning parameters are set.
@@ -1419,7 +1435,7 @@ def _build_hyper_tau_llm_args(
 
     args_dict: dict = {}
 
-    if reasoning_effort and model.startswith("gpt-5"):
+    if reasoning_effort and supports_reasoning_effort(model):
         args_dict["reasoning_effort"] = reasoning_effort
 
     if thinking_budget and "claude" in model:
@@ -1619,11 +1635,13 @@ def _run_hyper_tau_sandbox(args, task, console):
     )
 
     developer_harness = getattr(args, "developer_harness", DEFAULT_DEVELOPER_HARNESS)
+    developer_auth = getattr(args, "developer_auth", "api-key")
     builder = create_developer_builder(
         developer_harness,
         args.developer_llm,
         developer_llm_args,
         getattr(args, "developer_reasoning_effort", None),
+        developer_auth,
     )
 
     kit_dir = Path(args.kit_dir) if getattr(args, "kit_dir", None) else None
@@ -1664,6 +1682,7 @@ def _run_hyper_tau_sandbox(args, task, console):
     run_config = {
         "mode": "sandbox",
         "developer_harness": developer_harness,
+        "developer_auth": developer_auth,
         "developer_llm": args.developer_llm,
         "developer_llm_args": developer_llm_args,
         "agent_llm": orchestrator.agent_llm,

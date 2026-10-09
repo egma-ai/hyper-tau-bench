@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
+from tau2.config import OPENAI_REASONING_MODEL_PREFIXES
+
 ROUTING_PATH_ENV = "TAU2_MODEL_ROUTING"
 ROUTING_FILENAME = "model_routing.toml"
 
@@ -170,19 +172,20 @@ class ModelRoute:
     def uses_responses_api(self) -> bool:
         """Whether the call goes through the OpenAI Responses API.
 
-        gpt-5.x on an OpenAI endpoint needs ``/v1/responses`` (Chat Completions
-        rejects function tools with reasoning there). Other endpoints that
-        serve those ids — OpenRouter, a compatible proxy — translate on their
-        side, so they stay on Chat Completions unless the provider pins ``api``.
+        gpt-5.x and gpt-6.x on an OpenAI endpoint need ``/v1/responses`` (Chat
+        Completions rejects function tools with reasoning there). Other
+        endpoints that serve those ids — OpenRouter, a compatible proxy —
+        translate on their side, so they stay on Chat Completions unless the
+        provider pins ``api``.
         """
         if self.provider is None:
-            return self.upstream_model.startswith("gpt-5")
+            return self.upstream_model.startswith(OPENAI_REASONING_MODEL_PREFIXES)
         if self.provider.api == "responses":
             return True
         if self.provider.api == "chat":
             return False
         return (
-            self.upstream_model.startswith("gpt-5")
+            self.upstream_model.startswith(OPENAI_REASONING_MODEL_PREFIXES)
             and self.provider.wire == "openai"
             and self.provider.litellm_prefix in ("", "openai")
         )

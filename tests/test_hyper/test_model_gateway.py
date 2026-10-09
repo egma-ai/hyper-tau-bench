@@ -377,3 +377,120 @@ def test_sidecar_handler_reads_origin_and_wire_from_environment(monkeypatch):
         assert handler.wire == "openai"
     finally:
         handler.client.close()
+
+
+# --- ChatGPT-plan Developer seat -------------------------------------------
+
+
+def _write_chatgpt_login(path, access_token="at-secret", account_id="acct-1"):
+    path.write_text(
+        json.dumps(
+            {
+                "auth_mode": "chatgpt",
+                "tokens": {
+                    "access_token": access_token,
+                    "refresh_token": "rt-secret",
+                    "account_id": account_id,
+                },
+            }
+        )
+    )
+    return path
+
+
+def test_chatgpt_spec_mounts_the_login_without_recording_tokens(monkeypatch, tmp_path):
+    from tau2.hyper.sandbox.model_gateway import SIDECAR_CHATGPT_AUTH_PATH
+
+    login = _write_chatgpt_login(tmp_path / "auth.json")
+    monkeypatch.setattr("tau2.hyper.sandbox.model_gateway.load_dotenv", lambda: None)
+    monkeypatch.setenv("TAU2_CHATGPT_AUTH_FILE", str(login))
+
+    spec = ModelGatewaySpec.from_host_environment(
+        "chatgpt", model="gpt-6.1-sol", lifetime_seconds=60
+    )
+
+    assert spec.resolved_origin == "https://chatgpt.com/backend-api/codex"
+    assert spec.base_url == f"http://{MODEL_GATEWAY_HOST}:8143/chatgpt"
+    assert spec.sidecar_mounts() == [(str(login.resolve()), SIDECAR_CHATGPT_AUTH_PATH)]
+    environment = spec.sidecar_environment()
+    assert environment["TAU2_MODEL_GATEWAY_AUTH_FILE"] == SIDECAR_CHATGPT_AUTH_PATH
+    assert environment["TAU2_MODEL_GATEWAY_UPSTREAM_KEY"] == ""
+    assert spec.metadata()["upstream_credential"] == "chatgpt-subscription-login"
+    for rendered in (repr(spec), str(environment), str(spec.metadata())):
+        assert "at-secret" not in rendered
+        assert "rt-secret" not in rendered
+
+
+def test_chatgpt_spec_requires_a_usable_login(monkeypatch, tmp_path):
+    monkeypatch.setattr("tau2.hyper.sandbox.model_gateway.load_dotenv", lambda: None)
+    monkeypatch.delenv("TAU2_CHATGPT_AUTH_FILE", raising=False)
+    with pytest.raises(RuntimeError, match="TAU2_CHATGPT_AUTH_FILE"):
+        ModelGatewaySpec.from_host_environment(
+            "chatgpt", model="gpt-6.1-sol", lifetime_seconds=60
+        )
+
+    empty = tmp_path / "auth.json"
+    empty.write_text(json.dumps({"tokens": {}}))
+    monkeypatch.setenv("TAU2_CHATGPT_AUTH_FILE", str(empty))
+    with pytest.raises(ValueError, match="no access token"):
+        ModelGatewaySpec.from_host_environment(
+            "chatgpt", model="gpt-6.1-sol", lifetime_seconds=60
+        )
+
+
+def _handler_with(headers, **class_vars):
+    from email.message import Message
+
+    from tau2.hyper.sandbox.model_gateway import ModelGatewayRequestHandler
+
+    handler_class = type("Handler", (ModelGatewayRequestHandler,), class_vars)
+    handler = handler_class.__new__(handler_class)
+    handler.headers = Message()
+    for key, value in headers.items():
+        handler.headers[key] = value
+    return handler
+
+
+def test_chatgpt_handler_swaps_in_the_login_and_rereads_it(tmp_path):
+    login = _write_chatgpt_login(tmp_path / "auth.json")
+    handler = _handler_with(
+        {
+            "Authorization": "Bearer per-run-gateway-token",
+            "Content-Type": "application/json",
+            "originator": "codex_cli_rs",
+            "session_id": "s-1",
+            "x-codex-turn-metadata": "{}",
+            "Cookie": "must-not-pass",
+        },
+        wire="openai",
+        auth_file=str(login),
+        upstream_api_key="",
+        upstream_organization=None,
+        upstream_project=None,
+    )
+
+    headers = handler._upstream_headers()
+    assert headers["Authorization"] == "Bearer at-secret"
+    assert headers["ChatGPT-Account-Id"] == "acct-1"
+    assert headers["originator"] == "codex_cli_rs"
+    assert headers["session_id"] == "s-1"
+    assert headers["x-codex-turn-metadata"] == "{}"
+    assert "Cookie" not in headers
+
+    # A refreshed login takes effect on the next request.
+    _write_chatgpt_login(login, access_token="at-refreshed")
+    assert handler._upstream_headers()["Authorization"] == "Bearer at-refreshed"
+
+
+def test_api_key_handler_does_not_forward_chatgpt_client_headers():
+    handler = _handler_with(
+        {"originator": "codex_cli_rs", "session_id": "s-1"},
+        wire="openai",
+        auth_file=None,
+        upstream_api_key="raw-key",
+        upstream_organization=None,
+        upstream_project=None,
+    )
+
+    headers = handler._upstream_headers()
+    assert headers == {"Authorization": "Bearer raw-key"}

@@ -459,6 +459,14 @@ class NativeSandboxRuntime:
         ]
         for key in sorted(sidecar_environment):
             command.extend(["-e", key])
+        for source, target in spec.sidecar_mounts():
+            command.extend(
+                [
+                    "--mount",
+                    f"type=bind,source={Path(source).resolve()},target={target},"
+                    "readonly",
+                ]
+            )
         command.extend(
             [
                 self.config.image,
