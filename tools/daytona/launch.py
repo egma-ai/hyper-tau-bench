@@ -390,18 +390,18 @@ def run_one(daytona, args, state: RunState, task_id: str, inputs, job_base) -> N
         if args.stop_on_failure and state.get(task_id).get("status") == "failed":
             args.abort.set()
         if sandbox is not None and not args.keep_sandboxes:
-            final = state.get(task_id)
-            # Keep a sandbox when the launcher itself errored: the task may
-            # still be running there, and a rerun re-attaches by label.
-            finished_in_sandbox = final.get("status") == "done" or str(
-                final.get("phase", "")
-            ).startswith(("failed:", "done"))
-            if finished_in_sandbox:
+            # Delete only a sandbox whose task produced a score. A failed
+            # task keeps its sandbox (the built workspace and logs stay until
+            # the TTL), and after a launcher error the task may still be
+            # running there; a rerun re-attaches by label.
+            if state.get(task_id).get("status") == "done":
                 try:
                     daytona.delete(sandbox)
                     log(f"{task_id[:3]} sandbox deleted")
                 except Exception as exc:  # noqa: BLE001
                     log(f"{task_id[:3]} delete failed: {exc}")
+            else:
+                log(f"{task_id[:3]} sandbox {sandbox.id} kept for inspection")
 
 
 # --- Summary ------------------------------------------------------------------
