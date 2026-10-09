@@ -287,3 +287,47 @@ def test_factory_wires_corpus_search_for_codex_only():
         create_developer_builder(
             "claude-code", "claude-opus-5", None, None, developer_corpus_search=True
         )
+
+
+def test_mcp_stub_lists_search_corpus_in_the_stripped_construction_image(tmp_path):
+    """The image strips corpus_search.py; the stub must not need it."""
+    import os
+    import shutil
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[2]
+    shutil.copytree(
+        repo / "src", tmp_path / "src", ignore=shutil.ignore_patterns("__pycache__")
+    )
+    strip = repo / "docker" / "hyper-construction" / "strip_runtime_src.py"
+    subprocess.run(
+        [sys.executable, str(strip)], cwd=tmp_path, check=True, capture_output=True
+    )
+    assert not (tmp_path / "src/tau2/hyper/sandbox/corpus_search.py").exists()
+
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(tmp_path / "src"),
+        "TAU2_CORPUS_SEARCH_TOOL_ENABLED": "1",
+        "TAU2_CLIENT_TOOL_ENABLED": "1",
+    }
+    requests = [
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+    ]
+    result = subprocess.run(
+        [sys.executable, "-m", "tau2.hyper.sandbox.callback_mcp"],
+        input="".join(json.dumps(r) + "\n" for r in requests),
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=tmp_path,
+        timeout=60,
+    )
+    replies = {r.get("id"): r for r in map(json.loads, result.stdout.splitlines())}
+    tools = [t["name"] for t in replies[2]["result"]["tools"]]
+    assert tools[-2:] == ["search_corpus", "submit"]
+    assert replies[2]["result"]["tools"][-2]["description"] == TOOL_DESCRIPTION

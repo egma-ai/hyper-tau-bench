@@ -34,6 +34,8 @@ from pathlib import Path
 from typing import Callable, Optional
 from xml.etree import ElementTree
 
+from tau2.hyper.sandbox.callback_mcp import CORPUS_SEARCH_TOOL
+
 DECISIONS_MODEL = "gpt-6-luna"
 DECISIONS_PATH = "/v1/decisions"
 # Public-beta list price: input tokens only, no output charge.
@@ -66,41 +68,10 @@ MEDIA_SUFFIXES = frozenset(
     ".wma .amr".split()
 )
 
-# What the Developer sees. Kept word for word as agreed for the experiment.
-TOOL_NAME = "search_corpus"
-TOOL_DESCRIPTION = (
-    "Ask a yes/no question of every file in the task materials at once. A "
-    "fast decision model reads each file and returns the probability that "
-    "the answer is yes for that file. Text files, Word/Excel/PowerPoint "
-    "files, emails and HTML are read as text, images are read as images, and "
-    "files inside .zip archives are included. Long files are judged in "
-    "sections and reported with line ranges. Returns the files at or above "
-    "min_probability, highest first; the result for every file is saved to "
-    "corpus_search/<timestamp>.json. Audio and video files are not read and "
-    "are listed as skipped. Limited to 200 calls per task."
-)
-TOOL_INPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "question": {
-            "type": "string",
-            "description": (
-                "The yes/no question to ask of each file, e.g. 'Does this file "
-                "state a rule about refunds for cancelled flights?'"
-            ),
-        },
-        "min_probability": {
-            "type": "number",
-            "default": 0.5,
-            "description": "Only list files at or above this probability.",
-        },
-        "path": {
-            "type": "string",
-            "description": "Only search files under this workspace-relative directory.",
-        },
-    },
-    "required": ["question"],
-}
+# What the Developer sees, defined in the in-container MCP stub.
+TOOL_NAME = CORPUS_SEARCH_TOOL["name"]
+TOOL_DESCRIPTION = CORPUS_SEARCH_TOOL["description"]
+TOOL_INPUT_SCHEMA = CORPUS_SEARCH_TOOL["inputSchema"]
 
 
 class CorpusSearchError(RuntimeError):

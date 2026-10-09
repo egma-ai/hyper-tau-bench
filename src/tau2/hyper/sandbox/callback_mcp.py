@@ -11,6 +11,48 @@ from pathlib import Path
 
 _PROTOCOL_VERSION = "2024-11-05"
 
+# Experiment tool (--developer-corpus-search). Defined here, not imported from
+# corpus_search: the construction image ships this stub but strips the
+# host-side corpus_search module. Kept word for word as agreed.
+CORPUS_SEARCH_TOOL = {
+    "name": "search_corpus",
+    "description": (
+        "Ask a yes/no question of every file in the task materials at once. A "
+        "fast decision model reads each file and returns the probability that "
+        "the answer is yes for that file. Text files, Word/Excel/PowerPoint "
+        "files, emails and HTML are read as text, images are read as images, and "
+        "files inside .zip archives are included. Long files are judged in "
+        "sections and reported with line ranges. Returns the files at or above "
+        "min_probability, highest first; the result for every file is saved to "
+        "corpus_search/<timestamp>.json. Audio and video files are not read and "
+        "are listed as skipped. Limited to 200 calls per task."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "question": {
+                "type": "string",
+                "description": (
+                    "The yes/no question to ask of each file, e.g. 'Does this file "
+                    "state a rule about refunds for cancelled flights?'"
+                ),
+            },
+            "min_probability": {
+                "type": "number",
+                "default": 0.5,
+                "description": "Only list files at or above this probability.",
+            },
+            "path": {
+                "type": "string",
+                "description": (
+                    "Only search files under this workspace-relative directory."
+                ),
+            },
+        },
+        "required": ["question"],
+    },
+}
+
 
 def _tool_definitions(
     *,
@@ -45,20 +87,7 @@ def _tool_definitions(
         },
     ]
     if include_corpus_search:
-        from tau2.hyper.sandbox.corpus_search import (
-            TOOL_DESCRIPTION,
-            TOOL_INPUT_SCHEMA,
-            TOOL_NAME,
-        )
-
-        tools.insert(
-            1,
-            {
-                "name": TOOL_NAME,
-                "description": TOOL_DESCRIPTION,
-                "inputSchema": TOOL_INPUT_SCHEMA,
-            },
-        )
+        tools.insert(1, CORPUS_SEARCH_TOOL)
     if include_sample_scenarios:
         tools.insert(
             1,
