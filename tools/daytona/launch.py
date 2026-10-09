@@ -12,17 +12,19 @@ OPENROUTER_API_KEY set or in .env):
 
     uv run --with "daytona>=0.210.0" python tools/daytona/launch.py \\
         --run-name pilot --tasks 001,016,021 --concurrency 3 \\
-        --developer-llm gpt-6.1-sol --developer-effort max \\
-        --developer-auth chatgpt --chatgpt-auth ~/.hypertau-codex/auth.json
+        --developer-llm gpt-6.1-sol --developer-effort max
 
 Results land in data/simulations/hyper_tau_daytona/<run-name>/ (state.json,
 one directory per task, summary.json and summary.md). Re-running the same
 command resumes: finished tasks are skipped and sandboxes that are still
 running are re-attached.
 
-With --developer-auth chatgpt, only the login's access token and account id
-are uploaded (never the refresh token), and the sealed runner keeps them in
-the model-gateway sidecar, out of the Developer's container.
+With --developer-auth chatgpt (the default), the Developer is billed to the
+ChatGPT login stored on Daytona by tools/daytona/chatgpt_login.py (sign in
+once; the keeper refreshes it), or to a local Codex login with --chatgpt-auth.
+Only the access token and account id are uploaded (never the refresh token),
+and the sealed runner keeps them in the model-gateway sidecar, out of the
+Developer's container.
 """
 
 from __future__ import annotations
@@ -39,6 +41,8 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+import chatgpt_login
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TASKS_DIR = REPO_ROOT / "data" / "tau2" / "hyper" / "tasks"
 RESULTS_ROOT = REPO_ROOT / "data" / "simulations" / "hyper_tau_daytona"
@@ -50,6 +54,8 @@ SANDBOX_HOME = "/root/hyper"
 SANDBOX_RECORDINGS = "/root/htb/data/simulations/hyper_tau"
 # Hard wall-clock cap per sandbox: 8 h build budget + setup + scoring.
 SANDBOX_TTL_MINUTES = 12 * 60
+# A sandbox's ChatGPT token must outlive the sandbox.
+MIN_TOKEN_HOURS = SANDBOX_TTL_MINUTES / 60 + 1
 USAGE_LIMIT_MARKERS = ("usage limit", "usage_limit", "rate_limit_exceeded")
 
 _print_lock = threading.Lock()
@@ -119,24 +125,52 @@ def load_dotenv_keys() -> dict[str, str]:
     return keys
 
 
-def chatgpt_access_file(path: Path) -> bytes:
-    """Access token + account id from a Codex login; refuses near-expiry."""
+def local_access_file(path: Path) -> tuple[bytes, float]:
+    """Access token + account id from a local Codex login, and its expiry."""
     tokens = json.loads(path.expanduser().read_text())["tokens"]
     access_token, account_id = tokens["access_token"], tokens.get("account_id")
     claims_b64 = access_token.split(".")[1]
     claims = json.loads(
         base64.urlsafe_b64decode(claims_b64 + "=" * (-len(claims_b64) % 4))
     )
-    hours_left = (claims.get("exp", 0) - time.time()) / 3600
-    if hours_left < 12:
-        raise SystemExit(
-            f"ChatGPT access token expires in {hours_left:.1f} h; refresh the "
-            "login (run any codex command with it) and retry"
-        )
-    log(f"ChatGPT access token valid for {hours_left:.0f} more hours")
-    return json.dumps(
-        {"tokens": {"access_token": access_token, "account_id": account_id}}
-    ).encode()
+    payload = {"tokens": {"access_token": access_token, "account_id": account_id}}
+    return json.dumps(payload).encode(), float(claims.get("exp", 0))
+
+
+class ChatGPTAccess:
+    """The access-token file each new sandbox gets, re-fetched before it ages.
+
+    By default it comes from the login keeper on Daytona, which refreshes the
+    stored login itself, so a run of any length never needs a new sign-in. A
+    local login (--chatgpt-auth) is never refreshed here: once it is too
+    close to expiry, new sandboxes are refused.
+    """
+
+    def __init__(self, local_login: Path | None):
+        self.local_login = local_login
+        self.lock = threading.Lock()
+        self.payload, self.expires_at = b"", 0.0
+
+    def get(self) -> bytes:
+        with self.lock:
+            if self.expires_at - time.time() < MIN_TOKEN_HOURS * 3600:
+                if self.local_login:
+                    fetched = local_access_file(self.local_login)
+                else:
+                    try:
+                        fetched = with_retries(chatgpt_login.fetch_access, attempts=3)
+                    except SystemExit as exc:  # no login stored: fail the task
+                        raise RuntimeError(str(exc)) from None
+                self.payload, self.expires_at = fetched
+                hours_left = (self.expires_at - time.time()) / 3600
+                if hours_left < MIN_TOKEN_HOURS:
+                    raise RuntimeError(
+                        f"ChatGPT access token expires in {hours_left:.1f} h; a "
+                        f"sandbox needs {MIN_TOKEN_HOURS:.0f} h. Use the Daytona "
+                        "login (drop --chatgpt-auth) or sign in again"
+                    )
+                log(f"ChatGPT access token valid for {hours_left:.0f} more hours")
+            return self.payload
 
 
 # --- State --------------------------------------------------------------------
@@ -294,6 +328,9 @@ def run_one(daytona, args, state: RunState, task_id: str, inputs, job_base) -> N
             except Exception:  # noqa: BLE001 - already gone
                 pass
         if sandbox is None:
+            task_inputs = dict(inputs)
+            if args.chatgpt_access:
+                task_inputs["chatgpt-auth.json"] = args.chatgpt_access.get()
             sandbox = create_sandbox(daytona, args.run_name, task_id)
             state.update(
                 task_id,
@@ -302,7 +339,7 @@ def run_one(daytona, args, state: RunState, task_id: str, inputs, job_base) -> N
                 started_at=datetime.now(timezone.utc).isoformat(),
             )
             log(f"{task_id[:3]} sandbox {sandbox.id} created")
-            start_task(sandbox, {**job_base, "TASK_ID": task_id}, inputs)
+            start_task(sandbox, {**job_base, "TASK_ID": task_id}, task_inputs)
 
         last_state = None
         poll_errors = 0
@@ -434,7 +471,12 @@ def main() -> None:
     parser.add_argument(
         "--developer-auth", choices=("api-key", "chatgpt"), default="chatgpt"
     )
-    parser.add_argument("--chatgpt-auth", type=Path, help="Codex login auth.json")
+    parser.add_argument(
+        "--chatgpt-auth",
+        type=Path,
+        help="a local Codex login auth.json instead of the login stored on "
+        "Daytona by chatgpt_login.py",
+    )
     parser.add_argument("--base-commit", help="upstream commit (default: merge-base)")
     parser.add_argument("--repo-url", default=UPSTREAM_REPO)
     parser.add_argument("--poll-seconds", type=int, default=60)
@@ -467,10 +509,9 @@ def main() -> None:
     keys = load_dotenv_keys()
     inputs = {"branch.patch": patch}
     dotenv = dict(keys)
+    args.chatgpt_access = None
     if args.developer_auth == "chatgpt":
-        if not args.chatgpt_auth:
-            raise SystemExit("--chatgpt-auth is required with --developer-auth chatgpt")
-        inputs["chatgpt-auth.json"] = chatgpt_access_file(args.chatgpt_auth)
+        args.chatgpt_access = ChatGPTAccess(args.chatgpt_auth)
         dotenv["TAU2_CHATGPT_AUTH_FILE"] = f"{SANDBOX_HOME}/chatgpt-auth.json"
     inputs["dotenv"] = "".join(f"{k}={v}\n" for k, v in dotenv.items()).encode()
     job_base = {
@@ -489,6 +530,11 @@ def main() -> None:
         for task_id in pending:
             log(f"would run {task_id}")
         return
+    if args.chatgpt_access:
+        try:
+            args.chatgpt_access.get()  # fail before any sandbox starts
+        except RuntimeError as exc:
+            raise SystemExit(str(exc)) from None
 
     from daytona import Daytona
 

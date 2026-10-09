@@ -28,8 +28,7 @@ construction image and runs the task.
 ```bash
 uv run --with "daytona>=0.210.0" python tools/daytona/launch.py \
     --run-name gpt61sol-max --tasks all --concurrency 10 \
-    --developer-llm gpt-6.1-sol --developer-effort max \
-    --developer-auth chatgpt --chatgpt-auth ~/.hypertau-codex/auth.json
+    --developer-llm gpt-6.1-sol --developer-effort max
 ```
 
 - `--tasks` takes `all` or a comma list of task ids or 3-digit release slots
@@ -45,20 +44,42 @@ uv run --with "daytona>=0.210.0" python tools/daytona/launch.py \
 
 ## Billing the Developer to a ChatGPT plan
 
-`--developer-auth chatgpt` serves the Developer model through Codex's
-ChatGPT-plan backend instead of an API key; the simulators, judges and the
-agents being scored still use your API keys. Create a dedicated Codex login
-for the launcher, separate from your everyday one (refresh tokens are
-single-use, so two machines refreshing one login log each other out):
+`--developer-auth chatgpt` (the default) serves the Developer model through
+Codex's ChatGPT-plan backend instead of an API key; the simulators, judges
+and the agents being scored still use your API keys.
+
+Sign in once. `chatgpt_login.py` keeps the Codex login in a small Daytona
+sandbox, the login keeper (1 vCPU, stopped when idle, never auto-deleted),
+and every launch, on any machine with the Daytona key, fetches its access
+token from there:
 
 ```bash
-CODEX_HOME=~/.hypertau-codex codex login --device-auth
+uv run --with "daytona>=0.210.0" python tools/daytona/chatgpt_login.py login
 ```
 
-The launcher uploads only that login's access token and account id (never the
-refresh token), and refuses to start if the token expires within 12 hours.
-In the sandbox, the token is mounted read-only into the model-gateway sidecar
-and never enters the Developer's container.
+This prints a device code to approve at https://auth.openai.com/codex/device
+once. Afterwards:
+
+- The keeper is the only place that ever refreshes the login (with Codex's
+  own refresh flow, under a lock). Refresh tokens are single-use, so a login
+  refreshed in two places logs both out; launchers never refresh it.
+- Each new sandbox gets a token valid for at least its 12-hour lifetime. The
+  keeper refreshes the login once it has less than 48 hours left, so runs of
+  any length and later runs need no new sign-in.
+- `chatgpt_login.py status --usage` shows the token expiry and the plan's
+  usage windows without spending a model turn. `store --auth <auth.json>`
+  moves an existing dedicated Codex login into the keeper instead of signing
+  in (its local copy becomes access-only). `forget --yes` deletes the keeper.
+- If OpenAI ever revokes the login (a password change, or signing out of all
+  sessions), run `chatgpt_login.py login --replace`.
+
+`--chatgpt-auth <auth.json>` uses a local Codex login instead. The launcher
+never refreshes it and refuses new sandboxes once it has less than 13 hours
+left.
+
+Either way, only the access token and account id reach a task sandbox
+(never the refresh token). There, the token is mounted read-only into the
+model-gateway sidecar and never enters the Developer's container.
 
 Caveats: OpenAI recommends API keys for automated Codex use, so batch runs on
 a personal plan are subject to its fair-use limits; every sandbox draws on
