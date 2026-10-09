@@ -109,6 +109,28 @@ def _read_chatgpt_credentials(path: str) -> tuple[str, Optional[str]]:
     return access_token, tokens.get("account_id")
 
 
+# A provider capacity incident ("Selected model is at capacity") makes the
+# harness give up on the build. Retry such responses before anything reaches
+# the harness, so a short incident costs a delay instead of the build. Plan
+# usage limits and quota errors are not overloads and pass straight through.
+_OVERLOAD_STATUSES = frozenset({429, 500, 502, 503, 504, 529})
+_OVERLOAD_MARKERS = ("capacity", "overloaded", "temporarily unavailable")
+_NEVER_RETRY_MARKERS = ("usage_limit", "usage limit", "insufficient_quota", "quota")
+OVERLOAD_RETRY_DELAYS = (5.0, 10.0, 20.0, 40.0, 60.0, 60.0, 60.0)
+
+
+def _is_transient_overload(status: int, body: bytes) -> bool:
+    """Whether an upstream error response is a retryable capacity overload."""
+    if status not in _OVERLOAD_STATUSES:
+        return False
+    text = body[:8192].decode("utf-8", errors="replace").lower()
+    if any(marker in text for marker in _NEVER_RETRY_MARKERS):
+        return False
+    return status in (502, 503, 504, 529) or any(
+        marker in text for marker in _OVERLOAD_MARKERS
+    )
+
+
 @contextmanager
 def _streaming_response(client, request):
     """Yield an httpx streaming response and always release its connection."""
@@ -583,23 +605,43 @@ class ModelGatewayRequestHandler(BaseHTTPRequestHandler):
         if parsed.query:
             upstream_url += f"?{parsed.query}"
         try:
-            request = self.client.build_request(
-                self.command,
-                upstream_url,
-                headers=headers,
-                content=body,
-            )
-            with _streaming_response(self.client, request) as response:
-                self.send_response(response.status_code)
-                response_started = True
-                for key, value in response.headers.items():
-                    if key.lower() not in _HOP_BY_HOP_HEADERS:
-                        self.send_header(key, value)
-                self.send_header("Connection", "close")
-                self.end_headers()
-                for chunk in response.iter_raw():
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
+            for delay in (*OVERLOAD_RETRY_DELAYS, None):
+                request = self.client.build_request(
+                    self.command,
+                    upstream_url,
+                    headers=headers,
+                    content=body,
+                )
+                with _streaming_response(self.client, request) as response:
+                    buffered = None
+                    if response.status_code in _OVERLOAD_STATUSES:
+                        buffered = response.read()
+                        if delay is not None and _is_transient_overload(
+                            response.status_code, buffered
+                        ):
+                            time.sleep(delay)
+                            headers = self._upstream_headers()
+                            continue
+                    self.send_response(response.status_code)
+                    response_started = True
+                    for key, value in response.headers.items():
+                        if key.lower() not in _HOP_BY_HOP_HEADERS and (
+                            buffered is None
+                            or key.lower() not in ("content-encoding", "content-length")
+                        ):
+                            self.send_header(key, value)
+                    if buffered is not None:
+                        self.send_header("Content-Length", str(len(buffered)))
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    if buffered is not None:
+                        self.wfile.write(buffered)
+                        self.wfile.flush()
+                    else:
+                        for chunk in response.iter_raw():
+                            self.wfile.write(chunk)
+                            self.wfile.flush()
+                break
         except httpx.HTTPError as exc:
             if not response_started and not self.wfile.closed:
                 try:

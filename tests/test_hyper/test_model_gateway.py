@@ -494,3 +494,113 @@ def test_api_key_handler_does_not_forward_chatgpt_client_headers():
 
     headers = handler._upstream_headers()
     assert headers == {"Authorization": "Bearer raw-key"}
+
+
+def _serve_gateway(upstream, monkeypatch, tmp_path):
+    """A real gateway on a free port in front of a mocked upstream."""
+    import threading
+    import time
+    from http.server import ThreadingHTTPServer
+
+    import httpx
+
+    from tau2.hyper.sandbox import model_gateway
+
+    monkeypatch.setattr(model_gateway, "OVERLOAD_RETRY_DELAYS", (0.01, 0.01, 0.01))
+    login = _write_chatgpt_login(tmp_path / "auth.json")
+    handler = type(
+        "Handler",
+        (model_gateway.ModelGatewayRequestHandler,),
+        {
+            "provider": "chatgpt",
+            "wire": "openai",
+            "model": "gpt-6.1-sol",
+            "token": "per-run-token",
+            "expires_at": time.time() + 60,
+            "upstream_api_key": "",
+            "upstream_organization": None,
+            "upstream_project": None,
+            "provider_prefs": None,
+            "upstream_origin": "https://chatgpt.example/backend-api/codex",
+            "auth_file": str(login),
+            "client": httpx.Client(transport=httpx.MockTransport(upstream)),
+        },
+    )
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _post_responses(server):
+    import httpx
+
+    return httpx.post(
+        f"http://127.0.0.1:{server.server_address[1]}/chatgpt/v1/responses",
+        headers={"Authorization": "Bearer per-run-token"},
+        json={"model": "gpt-6.1-sol", "input": "hi"},
+        timeout=10,
+    )
+
+
+def test_gateway_retries_a_capacity_overload_before_the_harness_sees_it(
+    monkeypatch, tmp_path
+):
+    import httpx
+
+    calls = []
+
+    def upstream(request):
+        calls.append(request.headers["Authorization"])
+        if len(calls) < 3:
+            return httpx.Response(
+                503, json={"error": {"message": "Selected model is at capacity."}}
+            )
+        # A real upstream body streams; a text= body is pre-read in httpx.
+        return httpx.Response(200, stream=httpx.ByteStream(b"data: done\n\n"))
+
+    server = _serve_gateway(upstream, monkeypatch, tmp_path)
+    try:
+        response = _post_responses(server)
+    finally:
+        server.shutdown()
+    assert response.status_code == 200
+    assert response.text == "data: done\n\n"
+    assert calls == ["Bearer at-secret"] * 3
+
+
+def test_gateway_passes_usage_limits_through_without_retrying(monkeypatch, tmp_path):
+    import httpx
+
+    calls = []
+
+    def upstream(request):
+        calls.append(1)
+        return httpx.Response(429, json={"error": {"type": "usage_limit_reached"}})
+
+    server = _serve_gateway(upstream, monkeypatch, tmp_path)
+    try:
+        response = _post_responses(server)
+    finally:
+        server.shutdown()
+    assert response.status_code == 429
+    assert response.json() == {"error": {"type": "usage_limit_reached"}}
+    assert len(calls) == 1
+
+
+def test_gateway_returns_the_overload_once_retries_run_out(monkeypatch, tmp_path):
+    import httpx
+
+    calls = []
+
+    def upstream(request):
+        calls.append(1)
+        return httpx.Response(503, json={"error": {"message": "overloaded"}})
+
+    server = _serve_gateway(upstream, monkeypatch, tmp_path)
+    try:
+        response = _post_responses(server)
+    finally:
+        server.shutdown()
+    assert response.status_code == 503
+    assert response.json() == {"error": {"message": "overloaded"}}
+    assert len(calls) == 4  # the first try plus three retries
