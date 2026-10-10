@@ -41,9 +41,11 @@ from tau2.data_model.simulation import (
 )
 from tau2.domains.banking_knowledge.retrieval import get_all_variant_names
 from tau2.hyper.harnesses.factory import (
+    CODEX_VERSIONS,
     DEFAULT_DEVELOPER_HARNESS,
     DEVELOPER_AUTH_MODES,
     DEVELOPER_HARNESSES,
+    DEVELOPER_SKILLS,
     create_developer_builder,
 )
 from tau2.hyper.run_defaults import (
@@ -1122,10 +1124,33 @@ def main():
         "--developer-corpus-search",
         action="store_true",
         help=(
-            "Experiment: give the Developer the search_corpus tool and its "
-            "skill, which ask a yes/no question of every task-material file "
-            "through the OpenAI Decisions API (codex harness only; needs "
-            "OPENAI_API_KEY on the host)."
+            "Experiment: give the Developer the search_corpus tool, which asks "
+            "a yes/no question of every task-material file through the OpenAI "
+            "Decisions API (codex harness only; needs OPENAI_API_KEY on the "
+            "host). Without --developer-skill it also installs the "
+            "search-corpus skill."
+        ),
+    )
+    hyper_tau_parser.add_argument(
+        "--developer-skill",
+        choices=DEVELOPER_SKILLS,
+        default=None,
+        help=(
+            "Experiment: install one skill for the Developer (codex harness "
+            "only). 'method' is the scenario/procedure/policy method alone; "
+            "'method-search' and 'search' describe search_corpus and need "
+            "--developer-corpus-search; 'search-corpus' is the search_corpus "
+            "run's skill."
+        ),
+    )
+    hyper_tau_parser.add_argument(
+        "--developer-codex-version",
+        choices=CODEX_VERSIONS,
+        default=None,
+        help=(
+            "Codex release the Developer runs (codex harness only; default "
+            f"{CODEX_VERSIONS[0]}). 0.144.6 is the release pin the paper used. "
+            "Build the construction image with the same CODEX_VERSION."
         ),
     )
     hyper_tau_parser.add_argument(
@@ -1647,6 +1672,8 @@ def _run_hyper_tau_sandbox(args, task, console):
     developer_harness = getattr(args, "developer_harness", DEFAULT_DEVELOPER_HARNESS)
     developer_auth = getattr(args, "developer_auth", "api-key")
     developer_corpus_search = getattr(args, "developer_corpus_search", False)
+    developer_skill = getattr(args, "developer_skill", None)
+    developer_codex_version = getattr(args, "developer_codex_version", None)
     builder = create_developer_builder(
         developer_harness,
         args.developer_llm,
@@ -1654,6 +1681,8 @@ def _run_hyper_tau_sandbox(args, task, console):
         getattr(args, "developer_reasoning_effort", None),
         developer_auth,
         developer_corpus_search=developer_corpus_search,
+        developer_skill=developer_skill,
+        developer_codex_version=developer_codex_version,
     )
 
     kit_dir = Path(args.kit_dir) if getattr(args, "kit_dir", None) else None
@@ -1696,6 +1725,10 @@ def _run_hyper_tau_sandbox(args, task, console):
         "developer_harness": developer_harness,
         "developer_auth": developer_auth,
         "developer_corpus_search": developer_corpus_search,
+        "developer_skill": getattr(builder, "developer_skill", None),
+        "developer_codex_version": (
+            builder.harness_version if developer_harness == "codex" else None
+        ),
         "developer_llm": args.developer_llm,
         "developer_llm_args": developer_llm_args,
         "agent_llm": orchestrator.agent_llm,

@@ -151,6 +151,8 @@ def test_search_lists_hits_saves_every_result_and_reports_skips(kit):
     lines = report.splitlines()
     assert lines[0].startswith("Asked ")
     assert "Skipped (not read): 2 audio/video." in report
+    assert lines[-1].startswith("Result for every item: corpus_search/")
+    assert " of 200" not in report and "call " not in lines[-1]
     hits = [line for line in lines if line[:4] in ("0.90", "0.60")]
     assert any("sop.md" in line for line in hits)
     assert any("policy.docx" in line for line in hits)
@@ -331,3 +333,57 @@ def test_mcp_stub_lists_search_corpus_in_the_stripped_construction_image(tmp_pat
     tools = [t["name"] for t in replies[2]["result"]["tools"]]
     assert tools[-2:] == ["search_corpus", "submit"]
     assert replies[2]["result"]["tools"][-2]["description"] == TOOL_DESCRIPTION
+
+
+def test_tool_description_matches_the_agreed_wording():
+    assert "fast & cheap AI model" in TOOL_DESCRIPTION
+    assert "Text files, PDFs, Word/Excel/PowerPoint files" in TOOL_DESCRIPTION
+    assert "200" not in TOOL_DESCRIPTION
+    assert TOOL_DESCRIPTION.endswith("are listed as skipped.")
+
+
+def test_telecom_skill_versions_install_one_skill_each():
+    from tau2.hyper.harnesses.codex import SKILLS
+    from tau2.hyper.harnesses.factory import DEVELOPER_SKILLS
+
+    assert tuple(SKILLS) == DEVELOPER_SKILLS
+    method = CodexSandboxBuilder(llm="gpt-5.6-sol", developer_skill="method")
+    files = method.runtime_files(include_client_tool=False)
+    path = "/runtime-home/.codex/skills/corpus-discovery/SKILL.md"
+    assert set(files) == {method.runtime_config_path, path}
+    assert files[path].startswith("---\nname: corpus-discovery\ndescription: ")
+    assert "search" not in files[path]
+    assert "search_corpus" not in files[method.runtime_config_path]
+    assert method.harness_config_metadata()["extra_skills"] == ["corpus-discovery"]
+    assert "extra_tools" not in method.harness_config_metadata()
+
+    both = CodexSandboxBuilder(
+        llm="gpt-5.6-sol", corpus_search=True, developer_skill="method-search"
+    )
+    files = both.runtime_files(
+        include_client_tool=False, include_corpus_search_tool=True
+    )
+    assert set(files) == {both.runtime_config_path, path}
+    # Version 2 is version 1's method word for word, plus the search text.
+    method_body = SKILLS["method"].source.read_text().split("---\n", 2)[2]
+    assert method_body in files[path]
+    assert "hyper_tau search_corpus tool" in files[path]
+
+    search = CodexSandboxBuilder(
+        llm="gpt-5.6-sol", corpus_search=True, developer_skill="search"
+    )
+    files = search.runtime_files(
+        include_client_tool=False, include_corpus_search_tool=True
+    )
+    skill = files["/runtime-home/.codex/skills/corpus-search/SKILL.md"]
+    assert skill.startswith("---\nname: corpus-search\ndescription: ")
+    assert "Scenarios" not in skill
+    assert search.harness_config_metadata()["developer_skill"] == "search"
+
+
+def test_skills_that_describe_search_need_the_tool():
+    for skill in ("method-search", "search", "search-corpus"):
+        with pytest.raises(ValueError, match="--developer-corpus-search"):
+            CodexSandboxBuilder(llm="gpt-5.6-sol", developer_skill=skill)
+    with pytest.raises(ValueError, match="Unsupported developer skill"):
+        CodexSandboxBuilder(llm="gpt-5.6-sol", developer_skill="playbook")

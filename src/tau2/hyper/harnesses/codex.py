@@ -3,18 +3,59 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
-from tau2.hyper.harnesses.factory import DEVELOPER_AUTH_MODES
+from tau2.hyper.harnesses.factory import CODEX_VERSIONS, DEVELOPER_AUTH_MODES
 from tau2.hyper.sandbox.builder import BuildStep
 from tau2.hyper.sandbox.native_builder import NativeSandboxBuilder
 from tau2.hyper.sandbox.native_runtime import NativeProcessEvent
 
 CODEX_HARNESS_VERSION = "0.162.0"
-# Experiment add-on (--developer-corpus-search): a skill that explains the
-# search_corpus tool, installed where Codex discovers user skills.
-CORPUS_SEARCH_SKILL = Path(__file__).with_name("skills") / "search-corpus" / "SKILL.md"
-CORPUS_SEARCH_SKILL_PATH = "/runtime-home/.codex/skills/search-corpus/SKILL.md"
+# The release's pin, used by the paper's Codex rows. It keeps Codex's bundled
+# skills, as the release did; the newer pin turns them off.
+CODEX_RELEASE_VERSION = "0.144.6"
+
+_SKILLS_SOURCE = Path(__file__).with_name("skills")
+_SKILLS_ROOT = "/runtime-home/.codex/skills"
+
+
+@dataclass(frozen=True)
+class DeveloperSkill:
+    """An experiment skill, installed where Codex discovers user skills."""
+
+    name: str
+    source: Path
+    needs_corpus_search: bool
+
+    @property
+    def install_path(self) -> str:
+        return f"{_SKILLS_ROOT}/{self.name}/SKILL.md"
+
+
+# --developer-skill choices. Two versions share the name corpus-discovery: the
+# method alone, and the method plus the search_corpus paragraphs.
+SKILLS = {
+    "search-corpus": DeveloperSkill(
+        "search-corpus", _SKILLS_SOURCE / "search-corpus" / "SKILL.md", True
+    ),
+    "method": DeveloperSkill(
+        "corpus-discovery",
+        _SKILLS_SOURCE / "corpus-discovery-method" / "SKILL.md",
+        False,
+    ),
+    "method-search": DeveloperSkill(
+        "corpus-discovery",
+        _SKILLS_SOURCE / "corpus-discovery-search" / "SKILL.md",
+        True,
+    ),
+    "search": DeveloperSkill(
+        "corpus-search", _SKILLS_SOURCE / "corpus-search" / "SKILL.md", True
+    ),
+}
+# The search_corpus run's skill, installed by --developer-corpus-search alone.
+CORPUS_SEARCH_SKILL = SKILLS["search-corpus"].source
+CORPUS_SEARCH_SKILL_PATH = SKILLS["search-corpus"].install_path
 
 
 class CodexSandboxBuilder(NativeSandboxBuilder):
@@ -31,6 +72,8 @@ class CodexSandboxBuilder(NativeSandboxBuilder):
         *,
         developer_auth: str = "api-key",
         corpus_search: bool = False,
+        developer_skill: str | None = None,
+        codex_version: str = CODEX_HARNESS_VERSION,
         **kwargs,
     ):
         super().__init__(llm, **kwargs)
@@ -45,6 +88,31 @@ class CodexSandboxBuilder(NativeSandboxBuilder):
             # Codex still talks only to the gateway; the gateway's chatgpt
             # provider bills the calls to a ChatGPT plan.
             self.model_gateway_provider = "chatgpt"
+        if codex_version not in CODEX_VERSIONS:
+            raise ValueError(
+                f"Unsupported Codex version {codex_version!r}; "
+                f"choose from {list(CODEX_VERSIONS)}"
+            )
+        self.harness_version = codex_version
+        if developer_skill is None and corpus_search:
+            developer_skill = "search-corpus"
+        if developer_skill is not None and developer_skill not in SKILLS:
+            raise ValueError(
+                f"Unsupported developer skill {developer_skill!r}; "
+                f"choose from {list(SKILLS)}"
+            )
+        if developer_skill and SKILLS[developer_skill].needs_corpus_search:
+            if not corpus_search:
+                raise ValueError(
+                    f"The {developer_skill!r} skill describes search_corpus; "
+                    "enable the tool with --developer-corpus-search"
+                )
+        self.developer_skill = developer_skill
+
+    @property
+    def bundled_skills(self) -> bool:
+        """Whether Codex offers its bundled skills (the release pin did)."""
+        return self.harness_version == CODEX_RELEASE_VERSION
 
     def harness_config_metadata(self) -> dict:
         metadata = {
@@ -55,7 +123,7 @@ class CodexSandboxBuilder(NativeSandboxBuilder):
             "apps": False,
             "multi_agent": False,
             "memory": False,
-            "bundled_skills": False,
+            "bundled_skills": self.bundled_skills,
             "history_persistence": "none",
             "model_gateway": "provider-only/per-run/model-scoped",
             "gateway_token_inherited_by_shell": False,
@@ -74,7 +142,9 @@ class CodexSandboxBuilder(NativeSandboxBuilder):
             metadata["developer_auth"] = "chatgpt-subscription"
         if self.corpus_search_enabled:
             metadata["extra_tools"] = ["search_corpus"]
-            metadata["extra_skills"] = ["search-corpus"]
+        if self.developer_skill:
+            metadata["extra_skills"] = [SKILLS[self.developer_skill].name]
+            metadata["developer_skill"] = self.developer_skill
         return metadata
 
     def runtime_environment(self, broker) -> dict[str, str]:
@@ -147,9 +217,8 @@ class CodexSandboxBuilder(NativeSandboxBuilder):
             "shell_tool = true\n"
             "\n[feedback]\n"
             "enabled = false\n"
-            "\n[skills.bundled]\n"
-            "enabled = false\n"
-            "\n[mcp_servers.hyper_tau]\n"
+            + ("" if self.bundled_skills else "\n[skills.bundled]\nenabled = false\n")
+            + "\n[mcp_servers.hyper_tau]\n"
             'command = "/opt/tau2/.venv/bin/python"\n'
             'args = ["-m", "tau2.hyper.sandbox.callback_mcp"]\n'
             "required = true\n"
@@ -178,8 +247,9 @@ class CodexSandboxBuilder(NativeSandboxBuilder):
         files = super().runtime_files(
             include_corpus_search_tool=include_corpus_search_tool, **tool_flags
         )
-        if include_corpus_search_tool:
-            files[CORPUS_SEARCH_SKILL_PATH] = CORPUS_SEARCH_SKILL.read_text()
+        if self.developer_skill:
+            skill = SKILLS[self.developer_skill]
+            files[skill.install_path] = skill.source.read_text()
         return files
 
     def harness_command(self) -> list[str]:

@@ -13,19 +13,20 @@ _PROTOCOL_VERSION = "2024-11-05"
 
 # Experiment tool (--developer-corpus-search). Defined here, not imported from
 # corpus_search: the construction image ships this stub but strips the
-# host-side corpus_search module. Kept word for word as agreed.
+# host-side corpus_search module. Kept word for word as agreed, matching the
+# telecom experiment's skills; the per-task call cap is not advertised.
 CORPUS_SEARCH_TOOL = {
     "name": "search_corpus",
     "description": (
         "Ask a yes/no question of every file in the task materials at once. A "
-        "fast decision model reads each file and returns the probability that "
-        "the answer is yes for that file. Text files, Word/Excel/PowerPoint "
+        "fast & cheap AI model reads each file and returns the probability that "
+        "the answer is yes for that file. Text files, PDFs, Word/Excel/PowerPoint "
         "files, emails and HTML are read as text, images are read as images, and "
         "files inside .zip archives are included. Long files are judged in "
         "sections and reported with line ranges. Returns the files at or above "
         "min_probability, highest first; the result for every file is saved to "
         "corpus_search/<timestamp>.json. Audio and video files are not read and "
-        "are listed as skipped. Limited to 200 calls per task."
+        "are listed as skipped."
     ),
     "inputSchema": {
         "type": "object",

@@ -60,3 +60,26 @@ def test_chatgpt_developer_auth_is_codex_only():
         create_developer_builder(
             "claude-code", "claude-opus-4-6", {}, "high", developer_auth="chatgpt"
         )
+
+
+def test_skills_and_codex_versions_are_codex_only():
+    import pytest
+
+    builder = create_developer_builder(
+        "codex",
+        "gpt-5.6-sol",
+        None,
+        "xhigh",
+        developer_skill="method",
+        developer_codex_version="0.144.6",
+    )
+    assert builder.developer_skill == "method"
+    assert builder.harness_version == "0.144.6"
+    with pytest.raises(ValueError, match="codex harness"):
+        create_developer_builder(
+            "claude-code", "claude-opus-5", None, None, developer_skill="method"
+        )
+    with pytest.raises(ValueError, match="codex harness"):
+        create_developer_builder(
+            "opencode", "gpt-5.6-sol", None, None, developer_codex_version="0.144.6"
+        )

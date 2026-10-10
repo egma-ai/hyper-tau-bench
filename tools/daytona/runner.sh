@@ -5,7 +5,9 @@
 #
 # Inputs (all under $H, written by the launcher before this starts):
 #   job.env           TASK_ID, BASE_COMMIT, REPO_URL, DEV_LLM, DEV_EFFORT, DEV_AUTH,
-#                     DEV_CORPUS_SEARCH (1 = the search_corpus experiment)
+#                     DEV_CORPUS_SEARCH (1 = the search_corpus experiment),
+#                     DEV_SKILL (an experiment skill, or empty),
+#                     CODEX_VERSION (the Codex the image installs, or empty)
 #   branch.patch      `git diff --binary BASE_COMMIT` of the launcher's checkout
 #   dotenv            the repo .env (provider keys, TAU2_CHATGPT_AUTH_FILE)
 #   chatgpt-auth.json access token + account id only (when DEV_AUTH=chatgpt)
@@ -54,10 +56,19 @@ cd "$REPO" || fail code
 uv sync --frozen --python python3 >> "$H/runner.log" 2>&1 || fail uv-sync
 
 state building-image
+# CODEX_VERSION overrides the Dockerfile's pin; the harness is told the same
+# version below, so the recorded harness identity matches the image.
+CODEX_ARG=""
+if [ -n "${CODEX_VERSION:-}" ]; then
+    CODEX_ARG="--build-arg CODEX_VERSION=$CODEX_VERSION"
+fi
+# shellcheck disable=SC2086 # $CODEX_ARG is a flag list
 docker build -f docker/hyper-construction/Dockerfile \
     -t tau2-construction-runtime:contract-v7 \
-    --build-arg TAU2_SOURCE_REVISION="$BASE_COMMIT+patch" . \
+    --build-arg TAU2_SOURCE_REVISION="$BASE_COMMIT+patch" $CODEX_ARG . \
     > "$H/build.log" 2>&1 || fail image-build
+log "image codex: $(docker run --rm --entrypoint codex \
+    tau2-construction-runtime:contract-v7 --version 2>&1 | tail -1)"
 
 state running
 # The search_corpus experiment reads PDFs with pypdf in this host process
@@ -67,6 +78,12 @@ WITH=""
 if [ "${DEV_CORPUS_SEARCH:-0}" = 1 ]; then
     EXPERIMENT="--developer-corpus-search"
     WITH="--with pypdf"
+fi
+if [ -n "${DEV_SKILL:-}" ]; then
+    EXPERIMENT="$EXPERIMENT --developer-skill $DEV_SKILL"
+fi
+if [ -n "${CODEX_VERSION:-}" ]; then
+    EXPERIMENT="$EXPERIMENT --developer-codex-version $CODEX_VERSION"
 fi
 # shellcheck disable=SC2086 # $WITH and $EXPERIMENT are flag lists
 uv run --frozen $WITH tau2 hyper-tau "$TASK_ID" \

@@ -438,6 +438,8 @@ def summarize(args, state: RunState, tasks: list[str]) -> dict:
             "reasoning_effort": args.developer_effort,
             "auth": args.developer_auth,
             "corpus_search": args.corpus_search,
+            "skill": args.developer_skill,
+            "codex_version": args.codex_version,
         },
         "sandbox": {"memory_gb": args.memory_gb, "inner_workers": args.inner_workers},
         "tasks_total": len(tasks),
@@ -496,7 +498,20 @@ def main() -> None:
     parser.add_argument(
         "--corpus-search",
         action="store_true",
-        help="experiment: give the Developer the search_corpus tool and skill",
+        help="experiment: give the Developer the search_corpus tool (and, "
+        "without --developer-skill, its search-corpus skill)",
+    )
+    parser.add_argument(
+        "--developer-skill",
+        choices=("search-corpus", "method", "method-search", "search"),
+        help="experiment: the one skill the Developer gets (see tau2 hyper-tau "
+        "--developer-skill)",
+    )
+    parser.add_argument(
+        "--codex-version",
+        choices=("0.162.0", "0.144.6"),
+        help="Codex release for the construction image and the harness "
+        "(default: the Dockerfile's pin); 0.144.6 is the paper's",
     )
     parser.add_argument("--base-commit", help="upstream commit (default: merge-base)")
     parser.add_argument("--repo-url", default=UPSTREAM_REPO)
@@ -530,6 +545,9 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
+    if args.developer_skill not in (None, "method") and not args.corpus_search:
+        # Checked here too: the sandbox would only find out after its setup.
+        parser.error(f"--developer-skill {args.developer_skill} needs --corpus-search")
     tasks = resolve_tasks(args.tasks)
     args.run_dir = RESULTS_ROOT / args.run_name
     args.run_dir.mkdir(parents=True, exist_ok=True)
@@ -556,6 +574,8 @@ def main() -> None:
         "DEV_EFFORT": args.developer_effort,
         "DEV_AUTH": args.developer_auth,
         "DEV_CORPUS_SEARCH": "1" if args.corpus_search else "0",
+        "DEV_SKILL": args.developer_skill or "",
+        "CODEX_VERSION": args.codex_version or "",
     }
     pending = [t for t in tasks if state.get(t).get("status") != "done"]
     log(

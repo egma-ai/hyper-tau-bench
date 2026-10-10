@@ -257,3 +257,27 @@ def test_codex_rejects_unknown_developer_auth():
 
     with pytest.raises(ValueError, match="Unsupported developer auth"):
         CodexSandboxBuilder("gpt-6.1-sol", developer_auth="cookie")
+
+
+def test_codex_release_pin_keeps_bundled_skills_and_records_its_version():
+    """0.144.6 runs as the release did: Codex's bundled skills stay on."""
+    from tau2.hyper.harnesses.codex import CODEX_RELEASE_VERSION
+
+    builder = CodexSandboxBuilder("gpt-5.6-sol", codex_version=CODEX_RELEASE_VERSION)
+
+    assert builder.harness_identity().version == "0.144.6"
+    assert builder.harness_config_metadata()["bundled_skills"] is True
+    assert "[skills.bundled]" not in builder.render_runtime_config(
+        include_client_tool=False
+    )
+    # The current pin keeps them off.
+    assert CodexSandboxBuilder("gpt-5.6-sol").harness_identity().version == (
+        CODEX_HARNESS_VERSION
+    )
+
+
+def test_codex_rejects_unknown_codex_version():
+    import pytest
+
+    with pytest.raises(ValueError, match="Unsupported Codex version"):
+        CodexSandboxBuilder("gpt-5.6-sol", codex_version="0.150.0")

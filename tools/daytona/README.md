@@ -54,6 +54,25 @@ uv run --with "daytona>=0.210.0" python tools/daytona/launch.py \
   yes/no question of every task-material file through the OpenAI Decisions
   API, billed to `OPENAI_API_KEY` (about $0.08 per call on a telecom corpus,
   $0.35 on banking's 1,900 files).
+- `--developer-skill` picks the one experiment skill the Developer gets
+  instead: `method` (the scenario/procedure/policy method, no tool),
+  `method-search` (the method plus the search_corpus text) or `search` (the
+  search_corpus text alone). The last two need `--corpus-search`.
+- `--codex-version 0.144.6` builds the image with the release's Codex, as in
+  the paper's Codex rows, and keeps Codex's bundled skills on as the release
+  did. Each runner log records the image's `codex --version`.
+
+The telecom experiment runs one launcher per version, all at once:
+
+```bash
+for v in method method-search search; do
+  extra=""; [ "$v" != method ] && extra="--corpus-search"
+  uv run --with "daytona>=0.210.0" python tools/daytona/launch.py \
+      --run-name telecom-$v --tasks 013,014,015,016,017,018 --concurrency 6 \
+      --developer-llm gpt-5.6-sol --developer-effort xhigh \
+      --codex-version 0.144.6 --developer-skill $v $extra &
+done
+```
 
 ## Billing the Developer to a ChatGPT plan
 

@@ -613,8 +613,6 @@ class CorpusSearch:
         report += [f"{p:.2f}  {unit.label}" for unit, p in hits[:MAX_LISTED]]
         if len(hits) > MAX_LISTED:
             report.append(f"... {len(hits) - MAX_LISTED} more in the saved result.")
-        report.append(
-            f"Result for every item: corpus_search/{out_path.name} "
-            f"(call {self.calls_used} of {self.max_calls})."
-        )
+        # The call cap is a safety stop, not advertised to the Developer.
+        report.append(f"Result for every item: corpus_search/{out_path.name}.")
         return "\n".join(report)
