@@ -70,6 +70,19 @@ hyper-construction-image:
 		-t tau2-construction-runtime:contract-v7 \
 		-t tau2-construction-runtime:$$REVISION .
 
+## Build the trusted runtime image that exported Harbor tasks run their sidecars and verifiers in
+.PHONY: harbor-runtime-image
+harbor-runtime-image:
+	REVISION=$$(git rev-parse HEAD); docker build \
+		--build-arg TAU2_SOURCE_REVISION=$$REVISION \
+		-f docker/harbor-runtime/Dockerfile \
+		-t tau2-harbor-runtime:local \
+		-t tau2-harbor-runtime:$$REVISION .
+
+## Build every image exported Harbor tasks use
+.PHONY: harbor-images
+harbor-images: hyper-construction-image harbor-runtime-image
+
 ## Install pre-commit hooks
 .PHONY: setup-hooks
 setup-hooks:

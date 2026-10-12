@@ -48,6 +48,7 @@ Required keys depend on the task:
 | `make format` | Format with ruff | `uv sync --extra dev` |
 | `make lint-fix` | Lint and auto-fix | `uv sync --extra dev` |
 | `make check-all` | Run lint + format (same as pre-commit hook) | `uv sync --extra dev` |
+| `make harbor-images` | Build the construction and trusted runtime images for Harbor tasks | Docker |
 | `make clean` | Remove venv, caches, build artifacts | — |
 | `make env-cli` | Interactive environment CLI for testing domain tools | — |
 
@@ -81,6 +82,7 @@ src/tau2/
 ├── environment/     # Environment, DB, server, toolkit base classes
 ├── evaluator/       # Task evaluation logic
 ├── gym/             # Gymnasium-compatible RL interface
+├── harbor/          # Harbor exports of both loops (`tau2 harbor export-inner|export-outer`): exporters, trusted sidecar runtimes, verifiers, MCP bridge
 ├── hyper/           # The τ^τ outer loop (Client ⇄ Developer ⇄ sandbox construction wrapping the τ³ inner loop); registered as hyper_<base> domains for task discovery. The CLI entry point is `tau2 hyper-tau`.
 ├── knowledge/       # Knowledge retrieval pipeline (embedders, retrievers, postprocessors, sandbox)
 ├── metrics/         # Metrics computation
@@ -99,6 +101,7 @@ Other top-level directories:
 - `tests/` — All tests (pytest)
 - `web/leaderboard/` — The τ^τ leaderboard site
 - `docker/hyper-construction/` — The sealed construction runtime image
+- `docker/harbor-runtime/` — The trusted runtime image for exported Harbor tasks
 
 ## Key Patterns
 

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
+import stat
 import tempfile
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from tau2.hyper.sandbox.local_test import LocalTestService
 
@@ -29,6 +31,77 @@ class CallbackAuthenticationError(CallbackBrokerError):
 
 class CallbackQuotaError(CallbackBrokerError):
     """A callback quota was exhausted."""
+
+
+MAX_REQUEST_BYTES = 1024 * 1024
+
+
+def _read_request(path: Path) -> str:
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise CallbackBrokerError("Callback request is not a regular file") from exc
+    with os.fdopen(descriptor, "rb") as stream:
+        status = os.fstat(stream.fileno())
+        if not stat.S_ISREG(status.st_mode):
+            raise CallbackBrokerError("Callback request is not a regular file")
+        if status.st_size > MAX_REQUEST_BYTES:
+            raise CallbackBrokerError("Callback request is too large")
+        return stream.read(MAX_REQUEST_BYTES + 1).decode()
+
+
+def serve_file_requests(
+    directory: Path,
+    handle: Callable[[dict], Any],
+    stop: threading.Event,
+    *,
+    poll_seconds: float = 0.05,
+) -> None:
+    """Answer atomic request files in ``directory`` until ``stop`` is set.
+
+    Each ``request-<id>.json`` is claimed by renaming it, parsed, passed to
+    ``handle``, and answered with ``response-<id>.json`` holding
+    ``{"ok": true, "result": ...}`` or ``{"ok": false, "error": {...}}``.
+    Requests are served one at a time, in name order.
+    """
+    while not stop.wait(poll_seconds):
+        for request_path in sorted(directory.glob("request-*.json")):
+            request_id = request_path.stem.removeprefix("request-")
+            if not request_id.isalnum() or len(request_id) > 64:
+                request_path.unlink(missing_ok=True)
+                continue
+            claimed_path = directory / f"processing-{request_id}.json"
+            try:
+                request_path.replace(claimed_path)
+                request = json.loads(_read_request(claimed_path))
+                if not isinstance(request, dict):
+                    raise CallbackBrokerError("Callback request must be an object")
+                response = {"ok": True, "result": handle(request)}
+            except Exception as exc:  # noqa: BLE001 - serialized to MCP client
+                response = {
+                    "ok": False,
+                    "error": {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                }
+            finally:
+                claimed_path.unlink(missing_ok=True)
+
+            response_path = directory / f"response-{request_id}.json"
+            # The directory is writable by the untrusted side: write under an
+            # unguessable name and never follow a link planted there.
+            temporary_path = (
+                directory / f".response-{request_id}-{secrets.token_hex(8)}.tmp"
+            )
+            descriptor = os.open(
+                temporary_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o644,
+            )
+            with os.fdopen(descriptor, "w") as stream:
+                stream.write(json.dumps(response))
+            temporary_path.replace(response_path)
 
 
 class CallbackBroker:
@@ -163,41 +236,15 @@ class CallbackBroker:
         self._thread.start()
 
     def _serve(self) -> None:
-        while not self._stop.wait(0.05):
-            for request_path in sorted(self.callback_dir.glob("request-*.json")):
-                request_id = request_path.stem.removeprefix("request-")
-                if not request_id.isalnum() or len(request_id) > 64:
-                    request_path.unlink(missing_ok=True)
-                    continue
-                claimed_path = self.callback_dir / f"processing-{request_id}.json"
-                try:
-                    request_path.replace(claimed_path)
-                    if claimed_path.is_symlink():
-                        raise CallbackBrokerError("Symlinked callback request rejected")
-                    if claimed_path.stat().st_size > 1024 * 1024:
-                        raise CallbackBrokerError("Callback request is too large")
-                    request = json.loads(claimed_path.read_text())
-                    output = self.dispatch(
-                        token=str(request.get("token", "")),
-                        tool=str(request.get("tool", "")),
-                        arguments=request.get("arguments", {}),
-                    )
-                    response = {"ok": True, "result": output}
-                except Exception as exc:  # noqa: BLE001 - serialized to MCP client
-                    response = {
-                        "ok": False,
-                        "error": {
-                            "type": type(exc).__name__,
-                            "message": str(exc),
-                        },
-                    }
-                finally:
-                    claimed_path.unlink(missing_ok=True)
-
-                response_path = self.callback_dir / f"response-{request_id}.json"
-                temporary_path = self.callback_dir / f".response-{request_id}.tmp"
-                temporary_path.write_text(json.dumps(response))
-                temporary_path.replace(response_path)
+        serve_file_requests(
+            self.callback_dir,
+            lambda request: self.dispatch(
+                token=str(request.get("token", "")),
+                tool=str(request.get("tool", "")),
+                arguments=request.get("arguments", {}),
+            ),
+            self._stop,
+        )
 
     def metadata(self) -> dict:
         """Return callback configuration without its bearer token."""

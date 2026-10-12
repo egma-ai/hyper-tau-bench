@@ -2,7 +2,11 @@
 
 import subprocess
 
-from tau2.hyper.sandbox.orchestrator import initialize_kit_repository
+from tau2.hyper.sandbox.orchestrator import (
+    _classify_workspace_provenance,
+    initialize_kit_repository,
+    sanitize_kit_git_metadata,
+)
 
 
 def _git(kit_path, *args: str) -> str:
@@ -41,3 +45,45 @@ def test_initialize_kit_repository_replaces_no_existing_history(tmp_path):
         assert "already contains Git metadata" in str(exc)
     else:
         raise AssertionError("expected an existing repository to be rejected")
+
+
+def test_scoring_ignores_developer_git_configuration(tmp_path):
+    """Developer-written Git config cannot run commands in the scorer."""
+    kit = tmp_path / "kit"
+    (kit / "workspace").mkdir(parents=True)
+    (kit / "workspace" / "agent.py").write_text("# starter\n")
+    baseline = initialize_kit_repository(kit)
+
+    marker = tmp_path / "ran"
+    hook = tmp_path / "hook.sh"
+    hook.write_text(f"#!/bin/sh\necho >> {marker}\nexit 1\n")
+    hook.chmod(0o755)
+    _git(kit, "config", "core.fsmonitor", str(hook))
+    _git(kit, "config", "filter.planted.clean", f"echo >> {marker}; cat")
+    (kit / "workspace" / ".gitattributes").write_text("* filter=planted\n")
+    (kit / ".git" / "hooks" / "post-checkout").write_text("#!/bin/sh\n")
+    (kit / "workspace" / "agent.py").write_text("# built\n")
+
+    # Unsanitized, the provenance scan runs the planted commands.
+    _classify_workspace_provenance(kit, baseline)
+    assert marker.exists()
+    marker.unlink()
+
+    sanitize_kit_git_metadata(kit)
+    provenance, deleted = _classify_workspace_provenance(kit, baseline)
+
+    assert not marker.exists()
+    assert provenance == {
+        "workspace/agent.py": "modified",
+        "workspace/.gitattributes": "new",
+    }
+    assert deleted == []
+    assert not (kit / ".git" / "hooks").exists()
+    assert _git(kit, "config", "user.name") == "Workspace"
+
+
+def test_sanitize_drops_git_metadata_that_is_not_a_directory(tmp_path):
+    (tmp_path / ".git").write_text("gitdir: /somewhere/else\n")
+    sanitize_kit_git_metadata(tmp_path)
+    assert not (tmp_path / ".git").exists()
+    sanitize_kit_git_metadata(tmp_path)  # nothing to do

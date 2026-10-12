@@ -4,7 +4,9 @@
 Builder agents can read everything under /opt/tau2, so the image may ship
 only the modules the in-container runtime actually executes:
 
-- ``candidate_server`` (sealed scoring / local-test candidate process),
+- ``candidate_server`` (sealed scoring / local-test candidate process) and
+  ``candidate_host`` (serves candidate sessions from a long-lived candidate
+  service when no Docker daemon is reachable),
 - ``callback_mcp`` (in-container MCP stub proxying to the host broker),
 - ``model_gateway`` (sidecar entrypoint),
 - the Developer-facing contract surface the kit documents
@@ -36,6 +38,7 @@ KEEP_HYPER = [
     "client_api/__init__.py",
     "runtime_contract.py",
     "sandbox/__init__.py",
+    "sandbox/candidate_host.py",
     "sandbox/candidate_server.py",
     "sandbox/callback_mcp.py",
     "sandbox/model_gateway.py",
@@ -68,6 +71,7 @@ FORBIDDEN_MARKERS = [
 # results tooling and are never imported by the in-container runtime.
 REMOVE_OUTSIDE_HYPER = [
     "cli.py",
+    "harbor",
     "scripts",
 ]
 

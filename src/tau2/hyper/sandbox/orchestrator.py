@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean
 from typing import Optional
@@ -63,7 +64,7 @@ from tau2.hyper.runtime_contract import (
     CONSTRUCTION_RUNTIME_CONTRACT_VERSION,
     DEFAULT_CONSTRUCTION_RUNTIME_IMAGE,
 )
-from tau2.hyper.sandbox.builder import BuildBudget, SandboxBuilder
+from tau2.hyper.sandbox.builder import BuildBudget, BuildResult, SandboxBuilder
 from tau2.hyper.sandbox.kit import build_kit
 from tau2.hyper.sandbox.sealed_runner import (
     SealedCandidateEnvironment,
@@ -77,6 +78,18 @@ from tau2.runner.build import load_tasks_from_file
 # In-world neutral: the kit's git identity is Developer-visible (git log),
 # so it must not name the benchmark or harness.
 _KIT_BASELINE_MESSAGE = "Initial import"
+_KIT_GIT_USER_NAME = "Workspace"
+_KIT_GIT_USER_EMAIL = "workspace@localhost"
+_KIT_GIT_CONFIG = f"""\
+[core]
+\trepositoryformatversion = 0
+\tfilemode = true
+\tbare = false
+\tlogallrefupdates = true
+[user]
+\tname = {_KIT_GIT_USER_NAME}
+\temail = {_KIT_GIT_USER_EMAIL}
+"""
 
 
 def _get_git_sha() -> Optional[str]:
@@ -111,8 +124,8 @@ def initialize_kit_repository(kit_path: Path) -> str:
 
     commands = (
         ["git", "init", "--initial-branch", "main"],
-        ["git", "config", "user.name", "Workspace"],
-        ["git", "config", "user.email", "workspace@localhost"],
+        ["git", "config", "user.name", _KIT_GIT_USER_NAME],
+        ["git", "config", "user.email", _KIT_GIT_USER_EMAIL],
         ["git", "add", "--all"],
         [
             "git",
@@ -144,6 +157,31 @@ def initialize_kit_repository(kit_path: Path) -> str:
         check=True,
     )
     return result.stdout.strip()
+
+
+def sanitize_kit_git_metadata(kit_path: Path) -> None:
+    """Keep a submitted kit's Git history but none of its Git configuration.
+
+    Scoring runs ``git diff`` and ``git ls-files`` in the kit to classify the
+    Developer's changes. The Developer could write ``.git`` as well, and
+    repository configuration can make those commands run programs (an
+    fsmonitor hook, filter or diff drivers) in the scorer's process, so it is
+    reset to the settings :func:`initialize_kit_repository` wrote.
+    """
+    git_dir = Path(kit_path) / ".git"
+    if git_dir.is_symlink() or not git_dir.is_dir():
+        _remove_path(git_dir)
+        return
+    for name in ("config", "hooks", "info/attributes", "config.worktree", "commondir"):
+        _remove_path(git_dir / name)
+    (git_dir / "config").write_text(_KIT_GIT_CONFIG)
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif path.exists() or path.is_symlink():
+        path.unlink()
 
 
 def _hash_file(path: Path) -> str:
@@ -308,6 +346,16 @@ def _build_contamination_report(
     }
 
 
+@dataclass(frozen=True)
+class ConstructionStart:
+    """What the Developer starts from once the kit and its tools are ready."""
+
+    kit_path: Path
+    kit_baseline_commit: str
+    client_opening: str
+    brief: str
+
+
 class SandboxOrchestrator:
     """Orchestrator for sandbox-mode Hyper-τ evaluations.
 
@@ -366,6 +414,7 @@ class SandboxOrchestrator:
         self._client_context: Optional[ClientContext] = None
         self._capability_session: Optional[CapabilityDeploymentSession] = None
         self._deployment_snapshot: Optional[DeploymentSnapshot] = None
+        self._sample_scenarios_ctx: Optional[SampleScenariosContext] = None
 
     @classmethod
     def from_task(
@@ -642,6 +691,50 @@ class SandboxOrchestrator:
 
     def _run_impl(self, kit_path: Path, display) -> OuterLoopResult:
         """Internal implementation of the run pipeline."""
+        start = self.prepare_construction(kit_path, display=display)
+
+        # Phase 2: Run the builder
+        logger.info("Phase 2: Running sandbox builder")
+        build_result = self.builder.build(
+            kit_path, start.brief, self.budget, display=display
+        )
+        self.seal_deployment()
+
+        logger.info(
+            f"Builder finished: {build_result.done_reason}, "
+            f"{build_result.total_steps} steps, "
+            f"{build_result.total_tool_calls} tool calls"
+        )
+        return self.score_submission(
+            kit_path,
+            build_result,
+            kit_baseline_commit=start.kit_baseline_commit,
+            display=display,
+        )
+
+    def prepare_construction(
+        self,
+        kit_path: Path,
+        *,
+        display=None,
+        client_opening: Optional[str] = None,
+    ) -> ConstructionStart:
+        """Build the kit and wire the Developer tools into the builder.
+
+        Phases 1 and 1b of a run: the kit and its baseline commit, the live
+        experiment and sample-scenario contexts, the Client conversation,
+        and the task's sandbox configuration on the builder. Runs that
+        drive the Developer elsewhere (Harbor) call this, serve the
+        builder's contexts themselves, and score later with
+        :meth:`score_submission`.
+
+        Args:
+            kit_path: Directory to build the kit in.
+            display: Optional display adapter for live output.
+            client_opening: A Client opening generated earlier for this task.
+                When given, the Client conversation resumes from it instead
+                of generating a new one, so the brief is fixed in advance.
+        """
         domain = self.task.source_domain
         self._client_context = None
         self._capability_session = None
@@ -692,24 +785,12 @@ class SandboxOrchestrator:
             client_opening = ""
             logger.info("Construction task — skipping Client initialization")
         else:
-            from tau2.hyper.client import (
-                ClientSimulator,
-                client_capability_control_tools,
-            )
-
-            profile = self._client_api_defect_profile()
-            client = ClientSimulator(
-                llm=self.client_llm,
-                client_instructions=self._resolve_client_instructions(),
-                llm_args=self.client_llm_args,
-                tools=(
-                    client_capability_control_tools()
-                    if profile is not None and profile.capabilities
-                    else None
-                ),
-            )
-            client_brief_msg, client_state = client.generate_initial_brief()
-            client_opening = client_brief_msg.content or ""
+            client, profile = self._create_client()
+            if client_opening is None:
+                client_brief_msg, client_state = client.generate_initial_brief()
+                client_opening = client_brief_msg.content or ""
+            else:
+                client_state = client.state_after_brief(client_opening)
 
             if display and hasattr(display, "show_client_message"):
                 display.show_client_message(client_opening)
@@ -729,23 +810,77 @@ class SandboxOrchestrator:
             )
             self.builder.set_client_context(self._client_context)
 
-        # Phase 2: Run the builder
-        logger.info("Phase 2: Running sandbox builder")
         self._apply_sandbox_config_to_builder()
+        return ConstructionStart(
+            kit_path=kit_path,
+            kit_baseline_commit=kit_baseline_commit,
+            client_opening=client_opening,
+            brief=self._build_brief(client_opening),
+        )
 
-        brief = self._build_brief(client_opening)
-        build_result = self.builder.build(kit_path, brief, self.budget, display=display)
+    def _create_client(self):
+        """The task's Client simulator and its Client API deployment profile."""
+        from tau2.hyper.client import ClientSimulator, client_capability_control_tools
+
+        profile = self._client_api_defect_profile()
+        client = ClientSimulator(
+            llm=self.client_llm,
+            client_instructions=self._resolve_client_instructions(),
+            llm_args=self.client_llm_args,
+            tools=(
+                client_capability_control_tools()
+                if profile is not None and profile.capabilities
+                else None
+            ),
+        )
+        return client, profile
+
+    def generate_client_opening(self) -> str:
+        """Generate the Client's opening message ("" when there is no Client).
+
+        For runs whose brief is fixed before construction starts; pass the
+        result to :meth:`prepare_construction` as ``client_opening``.
+        """
+        if not self._client_enabled():
+            return ""
+        client, _ = self._create_client()
+        message, _ = client.generate_initial_brief()
+        return message.content or ""
+
+    def seal_deployment(self) -> DeploymentSnapshot:
+        """Freeze the Client API deployment the submission is scored against."""
         self._deployment_snapshot = (
             self._capability_session.seal()
             if self._capability_session is not None
             else empty_deployment_snapshot()
         )
+        return self._deployment_snapshot
 
-        logger.info(
-            f"Builder finished: {build_result.done_reason}, "
-            f"{build_result.total_steps} steps, "
-            f"{build_result.total_tool_calls} tool calls"
-        )
+    def score_submission(
+        self,
+        kit_path: Path,
+        build_result: BuildResult,
+        *,
+        kit_baseline_commit: str,
+        display=None,
+        run_metadata_overrides: Optional[dict] = None,
+    ) -> OuterLoopResult:
+        """Score the kit as submitted and assemble the run's result.
+
+        Phases 3 and 4 of a run. Scores against the deployment frozen by
+        :meth:`seal_deployment` (or restored into ``_deployment_snapshot``).
+
+        Args:
+            kit_path: The submitted kit.
+            build_result: The construction session's record.
+            kit_baseline_commit: The kit's initial commit, for provenance.
+            display: Optional display adapter for live output.
+            run_metadata_overrides: Entries replacing parts of the result's
+                ``run_metadata`` that this process did not observe itself
+                (for example the Client conversation of a session that ran
+                in another process).
+        """
+        domain = self.task.source_domain
 
         # Phase 3: Extract submission from the kit
         logger.info("Phase 3: Extracting submission")
@@ -814,6 +949,7 @@ class SandboxOrchestrator:
         )
 
         # Build trajectory steps from build_result
+        sanitize_kit_git_metadata(kit_path)
         artifact_manifest = _build_artifact_manifest(kit_path, kit_baseline_commit)
         contamination_report = _build_contamination_report(
             kit_path, domain, kit_baseline_commit
@@ -907,6 +1043,7 @@ class SandboxOrchestrator:
                 }
         if dev_env is None:
             run_metadata["construction_load_error"] = load_error
+        run_metadata.update(run_metadata_overrides or {})
 
         # Assemble the result
         outer_result = OuterLoopResult(

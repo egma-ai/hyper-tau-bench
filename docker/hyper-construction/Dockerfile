@@ -125,6 +125,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     && PYTHONPATH=/opt/tau2/src .venv/bin/python -c \
         "import tau2.hyper.agent_context, tau2.hyper.client_api, \
 tau2.hyper.runtime_contract, tau2.hyper.sandbox.candidate_server, \
+tau2.hyper.sandbox.candidate_host, \
 tau2.hyper.sandbox.callback_mcp, tau2.hyper.sandbox.model_gateway, \
 tau2.hyper.harnesses.codex_driver, \
 tau2.hyper.harnesses.prompt_arg_driver, tau2.hyper.harnesses.turn_loop_driver"

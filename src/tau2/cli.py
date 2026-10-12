@@ -1268,6 +1268,11 @@ def main():
     )
     routing_parser.set_defaults(func=lambda args: run_model_routing(args))
 
+    # Harbor datasets: τ³ conversations and Hyper-τ construction tasks
+    from tau2.harbor.cli import add_harbor_parser
+
+    add_harbor_parser(subparsers)
+
     args = parser.parse_args()
     if not hasattr(args, "func"):
         run_intro()

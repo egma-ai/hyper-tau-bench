@@ -329,13 +329,26 @@ class ClientSimulator(UserSimulator[ClientState]):
             **self.llm_args,
         )
         brief_text = assistant_message.content or ""
+        logger.info(f"Client sent initial brief ({len(brief_text)} chars)")
+        return UserMessage(role="user", content=brief_text), self.state_after_brief(
+            brief_text, state
+        )
+
+    def state_after_brief(
+        self, brief_text: str, state: Optional[ClientState] = None
+    ) -> ClientState:
+        """The Client's state once it has sent ``brief_text`` as its opening.
+
+        Used directly to resume a conversation from an opening generated
+        earlier (a Harbor task fixes the brief when it is exported).
+        """
+        state = state if state is not None else self.get_init_state()
         # Store the brief as the Client's own turn. With ``flip_roles``,
         # this will appear as role="assistant" to the LLM on the next
         # generation call, which is the correct frame ("I previously
         # said X").
         state.messages.append(UserMessage(role="user", content=brief_text))
-        logger.info(f"Client sent initial brief ({len(brief_text)} chars)")
-        return UserMessage(role="user", content=brief_text), state
+        return state
 
     def generate_response(
         self,
