@@ -27,15 +27,18 @@ four containers:
 The Client's opening message is part of the brief, so it is generated once
 per task at export time (one Client model call) and fixed in the task.
 
-Tool calls get the per-call limit the native harnesses give them (the
-construction budget), so long local tests and sample-scenario runs simply
-block until they finish: Claude Code reads it from ``MCP_TOOL_TIMEOUT``,
-and Codex from a system config (``/etc/codex/config.toml``) under the one
-Harbor writes.
+Harbor launches the agent with its own flags. The agent's image adds the
+settings the native Codex and Claude Code harnesses use (Codex reads them
+from ``/etc/codex/config.toml``, under the config Harbor writes; Claude Code
+from its managed settings and environment), so web search, sub-agents and
+the other features native runs switch off stay off. That includes the
+native per-call tool limit (the construction budget), so long local tests
+and sample-scenario runs simply block until they finish.
 """
 
 from __future__ import annotations
 
+import json
 import shlex
 import tomllib
 from dataclasses import dataclass, field
@@ -68,6 +71,11 @@ from tau2.harbor.runtime import (
     make_orchestrator,
 )
 from tau2.hyper.data_model import HyperTask
+from tau2.hyper.harnesses.claude import (
+    CLAUDE_CODE_ENVIRONMENT,
+    ClaudeCodeSandboxBuilder,
+)
+from tau2.hyper.harnesses.codex import CodexSandboxBuilder
 from tau2.hyper.runtime_contract import DEFAULT_CONSTRUCTION_RUNTIME_IMAGE
 from tau2.hyper.sandbox.builder import BuildBudget
 from tau2.hyper.sandbox.candidate_host import DEFAULT_PORT
@@ -89,7 +97,31 @@ TOOL_COMMAND = "/usr/local/bin/hyper-tau-tool"
 CANDIDATE_HOST_SCRIPT = "/opt/tau2/src/tau2/hyper/sandbox/candidate_host.py"
 CANDIDATE_ENDPOINT = f"{CANDIDATE_SERVICE}:{DEFAULT_PORT}"
 CODEX_SYSTEM_CONFIG = "/etc/codex/config.toml"
-CODEX_STARTUP_TIMEOUT_SEC = 30
+CLAUDE_MANAGED_SETTINGS = "/etc/claude-code/managed-settings.json"
+# Built-in tools the pinned Claude Code (CLAUDE_CODE_HARNESS_VERSION) offers
+# beyond the native harness's tool list. Native runs leave them out with
+# --tools; Harbor launches Claude Code with its own flags, so the agent's
+# image denies them instead.
+CLAUDE_CODE_EXTRA_TOOLS = (
+    "Agent",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "EnterWorktree",
+    "ExitWorktree",
+    "ReportFindings",
+    "ScheduleWakeup",
+    "SendMessage",
+    "Skill",
+    "Task",
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskOutput",
+    "TaskStop",
+    "TaskUpdate",
+    "Workflow",
+)
 
 HARBOR_NOTES = """\
 ## Working in this environment
@@ -254,23 +286,7 @@ def write_construction_task(task_dir: Path, task: HyperTask, options: ExportOpti
     ]
     if options.mcp_call_timeout_sec > 0:
         stub_args += ["--call-timeout", f"{options.mcp_call_timeout_sec:g}"]
-    # Codex merges the config Harbor writes for the task's MCP server over
-    # this system config, so the server keeps Harbor's entry and gains the
-    # native per-call limit; without it the pinned Codex gives up on a call
-    # after five minutes. The entry is complete on its own in case Harbor's
-    # config leaves it out.
-    codex_config = toml.dumps(
-        {
-            "mcp_servers": {
-                MCP_SERVER_NAME: {
-                    "command": STUB_PYTHON,
-                    "args": stub_args,
-                    "startup_timeout_sec": CODEX_STARTUP_TIMEOUT_SEC,
-                    "tool_timeout_sec": budget.max_time_seconds,
-                }
-            }
-        }
-    )
+    codex_config = codex_system_config(stub_args, budget.max_time_seconds)
 
     agent: dict = {"timeout_sec": float(budget.max_time_seconds)}
     if options.agent_network == "allowlist":
@@ -437,6 +453,14 @@ def write_construction_task(task_dir: Path, task: HyperTask, options: ExportOpti
         'if [ "$1" = "list" ]; then exec $STUB list; fi\n'
         'exec $STUB call "$@"\n'
     )
+    claude_environment = " \\\n    ".join(
+        f"{name}={value}"
+        for name, value in {
+            **CLAUDE_CODE_ENVIRONMENT,
+            "MCP_TIMEOUT": "60000",
+            "MCP_TOOL_TIMEOUT": str(budget.max_time_seconds * 1000),
+        }.items()
+    )
     main_dockerfile = (
         f"FROM {construction_image}\n"
         "# The Developer's container: the construction toolchain and the kit\n"
@@ -445,11 +469,14 @@ def write_construction_task(task_dir: Path, task: HyperTask, options: ExportOpti
         f"COPY mcp_stub.py {STUB_PATH}\n"
         f"COPY hyper-tau-tool {TOOL_COMMAND}\n"
         f"RUN chmod 0755 {TOOL_COMMAND} && mkdir -p {BRIDGE_DIR} {WORKSPACE}\n"
+        "# The settings native runs give Codex and Claude Code: web search,\n"
+        "# sub-agents, plugins and memory off.\n"
         "# Local tests, live experiments and sample scenarios can run for\n"
-        "# minutes. Tool calls get the per-call limit native runs give them:\n"
-        "# Claude Code reads MCP_TOOL_TIMEOUT, Codex the system config.\n"
-        f"ENV MCP_TIMEOUT=60000 MCP_TOOL_TIMEOUT={budget.max_time_seconds * 1000}\n"
+        "# minutes, so tool calls also get the native per-call limit: Claude\n"
+        "# Code reads MCP_TOOL_TIMEOUT, Codex its system config.\n"
         f"COPY codex-config.toml {CODEX_SYSTEM_CONFIG}\n"
+        f"COPY claude-managed-settings.json {CLAUDE_MANAGED_SETTINGS}\n"
+        f"ENV {claude_environment}\n"
         f"WORKDIR {WORKSPACE}\n"
     )
     test_script = (
@@ -495,6 +522,9 @@ def write_construction_task(task_dir: Path, task: HyperTask, options: ExportOpti
             "environment/mcp_stub.py": Path(mcp_stub.__file__).read_text(),
             "environment/hyper-tau-tool": tool_wrapper,
             "environment/codex-config.toml": codex_config,
+            "environment/claude-managed-settings.json": (
+                claude_code_managed_settings()
+            ),
             "tests/Dockerfile": verifier_dockerfile,
             "tests/docker-compose.yaml": dump_compose(verifier_compose),
             "tests/test.sh": test_script,
@@ -506,6 +536,48 @@ def write_construction_task(task_dir: Path, task: HyperTask, options: ExportOpti
             "solution/solve.sh",
         ),
     )
+
+
+def codex_system_config(stub_args: list[str], tool_timeout_sec: int) -> str:
+    """Codex's native harness settings, as the agent image's system config.
+
+    Codex merges the config Harbor writes (the task's MCP server, the run's
+    options) over this one, so a Harbor run keeps the native settings: web
+    search, apps, sub-agents and memories off, and the native per-call tool
+    limit, without which the pinned Codex gives up on a call after five
+    minutes. Only the native model gateway is left out: Harbor connects
+    Codex to the provider itself.
+    """
+    config = tomllib.loads(
+        CodexSandboxBuilder("").render_runtime_config(include_client_tool=False)
+    )
+    for key in ("model", "model_provider", "model_reasoning_effort"):
+        config.pop(key, None)
+    config.pop("model_providers")
+    server = config["mcp_servers"][MCP_SERVER_NAME]
+    # The stub serves exactly the task's tools and needs no environment.
+    del server["enabled_tools"], server["env_vars"]
+    server.update(
+        command=STUB_PYTHON, args=stub_args, tool_timeout_sec=tool_timeout_sec
+    )
+    return toml.dumps(config)
+
+
+def claude_code_managed_settings() -> str:
+    """Claude Code's native harness settings, as managed settings.
+
+    Managed settings take precedence over user and project settings, so a
+    Harbor run keeps the native settings, and the tools the native harness
+    leaves out (web search and fetch, sub-agents, scheduling, worktrees)
+    stay out of the model's tool list. Permission mode and allowed tools are
+    left to Harbor's launch.
+    """
+    settings = json.loads(
+        ClaudeCodeSandboxBuilder("").render_runtime_config(include_client_tool=False)
+    )
+    denied = settings.pop("permissions")["deny"]
+    settings["permissions"] = {"deny": [*denied, *CLAUDE_CODE_EXTRA_TOOLS]}
+    return json.dumps(settings, indent=2, sort_keys=True) + "\n"
 
 
 def candidate_service(image: str) -> dict:

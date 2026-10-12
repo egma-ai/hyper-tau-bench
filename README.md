@@ -124,10 +124,13 @@ harbor run -p harbor/hyper-tau -a codex -m openai/gpt-5.5 --env-file .env
 
 The Client, the user simulator, the hidden tasks, and the model keys stay in a
 trusted sidecar and a separate verifier; during the agent phase the agent's
-container reaches only model-provider hosts. Harbor's `oracle` agent submits
-the untouched starting kit, a check of the whole pipeline. See
+container reaches only model-provider hosts. Codex and Claude Code run with
+the settings the native harnesses give them, and Codex can also run on a
+ChatGPT plan instead of an API key. Harbor's `oracle` agent submits the
+untouched starting kit, a check of the whole pipeline. See
 [`src/tau2/harbor/README.md`](src/tau2/harbor/README.md) for the task layout,
-the trust boundary, and how a Harbor run differs from `tau2 hyper-tau`.
+the trust boundary, signing Codex in with a ChatGPT plan, and how a Harbor run
+differs from `tau2 hyper-tau`.
 
 ## API keys and model access
 

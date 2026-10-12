@@ -12,6 +12,36 @@ from tau2.hyper.sandbox.native_runtime import NativeProcessEvent
 
 CLAUDE_CODE_HARNESS_VERSION = "2.1.219"
 
+# Environment every native Claude Code run gets, whatever its model and tools.
+CLAUDE_CODE_ENVIRONMENT = {
+    "CLAUDE_CODE_DISABLE_ARTIFACT": "1",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+    "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS": "1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1",
+    "CLAUDE_CODE_DISABLE_WORKFLOWS": "1",
+    "CLAUDE_CODE_SKIP_PROMPT_HISTORY": "1",
+    # The construction container is itself the isolation boundary (internal-only
+    # network, no egress except the model gateway sidecar, cap-scoped). Claude
+    # Code's inner Bash sandbox nests a bubblewrap user namespace, which the
+    # container's default security context forbids ("No permissions to create
+    # new namespace"), so every Bash call failed preflight ("socat not
+    # installed" / bwrap). Tell Claude Code it is already sandboxed so Bash runs
+    # directly, matching the Codex lane's danger-full-access model. Env
+    # scrubbing also requires bubblewrap, so it is disabled; the per-run
+    # gateway token it would scrub is model-scoped and unexfiltratable (no
+    # egress).
+    "CLAUDE_CODE_SANDBOXED": "1",
+    "IS_SANDBOX": "1",
+    "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "0",
+    "CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS": "1",
+    "DISABLE_LOGIN_COMMAND": "1",
+    "DISABLE_LOGOUT_COMMAND": "1",
+    "DISABLE_UPDATES": "1",
+    "DISABLE_UPGRADE_COMMAND": "1",
+}
+
 
 def _text_content(value: Any) -> str:
     """Normalize Claude's string-or-block tool output for trajectory storage."""
@@ -91,38 +121,8 @@ class ClaudeCodeSandboxBuilder(NativeSandboxBuilder):
         callback_timeout_ms = str(
             int(float(environment["TAU2_CALLBACK_TIMEOUT_SECONDS"]) * 1000)
         )
-        environment.update(
-            {
-                "CLAUDE_CODE_DISABLE_ARTIFACT": "1",
-                "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
-                "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
-                "CLAUDE_CODE_DISABLE_BUNDLED_SKILLS": "1",
-                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-                "CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL": "1",
-                "CLAUDE_CODE_DISABLE_WORKFLOWS": "1",
-                "CLAUDE_CODE_SKIP_PROMPT_HISTORY": "1",
-                # The construction container is itself the isolation boundary
-                # (internal-only network, no egress except the model gateway
-                # sidecar, cap-scoped). Claude Code's inner Bash sandbox nests
-                # a bubblewrap user namespace, which the container's default
-                # security context forbids ("No permissions to create new
-                # namespace"), so every Bash call failed preflight ("socat not
-                # installed" / bwrap). Tell Claude Code it is already sandboxed
-                # so Bash runs directly, matching the Codex lane's
-                # danger-full-access model. Env scrubbing also requires
-                # bubblewrap, so it is disabled; the per-run gateway token it
-                # would scrub is model-scoped and unexfiltratable (no egress).
-                "CLAUDE_CODE_SANDBOXED": "1",
-                "IS_SANDBOX": "1",
-                "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "0",
-                "CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS": "1",
-                "DISABLE_LOGIN_COMMAND": "1",
-                "DISABLE_LOGOUT_COMMAND": "1",
-                "DISABLE_UPDATES": "1",
-                "DISABLE_UPGRADE_COMMAND": "1",
-                "MCP_TIMEOUT": callback_timeout_ms,
-            }
-        )
+        environment.update(CLAUDE_CODE_ENVIRONMENT)
+        environment["MCP_TIMEOUT"] = callback_timeout_ms
         thinking = self.llm_args.get("thinking")
         if isinstance(thinking, dict) and thinking.get("budget_tokens"):
             environment["MAX_THINKING_TOKENS"] = str(thinking["budget_tokens"])

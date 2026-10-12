@@ -16,13 +16,17 @@ import yaml
 from loguru import logger
 
 # Hosts the agent may reach during the agent phase of an exported task:
-# the model providers Harbor's installed agents call. A run can add more
-# with Harbor's --allowed-host / extra_allowed_hosts.
+# the model providers Harbor's installed agents call. Codex signed in with a
+# ChatGPT plan instead of an API key calls chatgpt.com and renews its sign-in
+# at auth.openai.com. An export adds more with --allowed-host, a run with
+# Harbor's --allow-agent-host.
 DEFAULT_AGENT_ALLOWED_HOSTS = (
     "api.openai.com",
     "api.anthropic.com",
     "openrouter.ai",
     "generativelanguage.googleapis.com",
+    "chatgpt.com",
+    "auth.openai.com",
 )
 
 # Provider keys forwarded to trusted sidecars and verifiers. Which ones a

@@ -14,6 +14,8 @@ from tau2.harbor.export import (
     export_tasks,
 )
 from tau2.harbor.runtime import CONFIG_ENV_VAR, TOKEN_ENV_VAR, ConstructionConfig
+from tau2.hyper.harnesses.claude import CLAUDE_CODE_ENVIRONMENT, _enabled_tools
+from tau2.hyper.harnesses.codex import CodexSandboxBuilder
 from tau2.hyper.sandbox.orchestrator import SandboxOrchestrator
 
 NO_CLIENT_TASK = "008_retail_plus_construction_core_evidence_performance_hard"
@@ -68,6 +70,7 @@ def test_exports_a_complete_construction_task(tmp_path, client_openings):
     )
     assert files == [
         "environment/Dockerfile",
+        "environment/claude-managed-settings.json",
         "environment/codex-config.toml",
         "environment/docker-compose.yaml",
         "environment/hyper-tau-tool",
@@ -89,6 +92,10 @@ def test_exports_a_complete_construction_task(tmp_path, client_openings):
     ]
     assert config["agent"]["timeout_sec"] == 28800.0
     assert config["agent"]["network_mode"] == "allowlist"
+    # Model providers, and ChatGPT for Codex signed in with a ChatGPT plan.
+    assert {"api.openai.com", "chatgpt.com", "auth.openai.com"} <= set(
+        config["agent"]["allowed_hosts"]
+    )
     assert config["verifier"]["environment_mode"] == "separate"
     (hook,) = config["verifier"]["collect"]
     assert hook["service"] == "hyper-runtime"
@@ -139,18 +146,61 @@ def test_exports_a_complete_construction_task(tmp_path, client_openings):
     assert "hyper-tau-tool" in instruction
     dockerfile = (task_dir / "environment" / "Dockerfile").read_text()
     assert dockerfile.startswith("FROM tau2-construction-runtime:contract-v7\n")
-    # Tool calls may run as long as native runs allow, in Claude Code and in
-    # Codex (whose system config Harbor's own config is merged over).
-    assert "MCP_TOOL_TIMEOUT=28800000" in dockerfile
+    assert token in (task_dir / "environment" / "hyper-tau-tool").read_text()
+    assert "hyper-tau-tool submit" in (task_dir / "solution" / "solve.sh").read_text()
+
+
+def test_agent_image_keeps_the_native_harness_settings(tmp_path, client_openings):
+    (task_dir,) = export(tmp_path, NO_CLIENT_TASK)
+    config, _, _ = load(task_dir)
+    (server,) = config["environment"]["mcp_servers"]
+    dockerfile = (task_dir / "environment" / "Dockerfile").read_text()
+
+    # Codex merges the config Harbor writes over this system config, so a
+    # Harbor run keeps the native settings and the native per-call limit.
     assert "COPY codex-config.toml /etc/codex/config.toml" in dockerfile
     codex = tomllib.loads((task_dir / "environment" / "codex-config.toml").read_text())
+    native = tomllib.loads(
+        CodexSandboxBuilder("gpt-5.5").render_runtime_config(include_client_tool=False)
+    )
+    assert codex["web_search"] == "disabled"
+    for key in ("features", "history", "memories", "feedback", "allow_login_shell"):
+        assert codex[key] == native[key]
+    assert codex["features"]["multi_agent"] is False
+    # Harbor connects Codex to the provider: no native model gateway.
+    assert not {"model", "model_provider", "model_providers"} & set(codex)
     assert codex["mcp_servers"]["hyper_tau"] == {
         "command": server["command"],
         "args": server["args"],
+        "required": True,
         "startup_timeout_sec": 30,
         "tool_timeout_sec": 28800,
+        "default_tools_approval_mode": "auto",
     }
-    assert token in (task_dir / "environment" / "hyper-tau-tool").read_text()
+
+    # Claude Code: the native environment and settings, and only the native
+    # tools (Harbor does not pass --tools).
+    assert (
+        "COPY claude-managed-settings.json /etc/claude-code/managed-settings.json"
+        in dockerfile
+    )
+    for name, value in CLAUDE_CODE_ENVIRONMENT.items():
+        assert f"{name}={value}" in dockerfile
+    assert "MCP_TOOL_TIMEOUT=28800000" in dockerfile
+    settings = json.loads(
+        (task_dir / "environment" / "claude-managed-settings.json").read_text()
+    )
+    assert settings["disableClaudeAiConnectors"] is True
+    assert settings["autoMemoryEnabled"] is False
+    denied = set(settings["permissions"]["deny"])
+    assert {"WebSearch", "WebFetch", "Agent", "Task", "Workflow"} <= denied
+    native_tools = _enabled_tools(
+        include_client_tool=True,
+        include_live_experiment_tool=True,
+        include_sample_scenarios_tool=True,
+    )
+    assert not denied & set(native_tools)
+    assert set(settings["permissions"]) == {"deny"}
     assert "hyper-tau-tool submit" in (task_dir / "solution" / "solve.sh").read_text()
 
 
