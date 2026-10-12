@@ -72,13 +72,18 @@ RUN git config --system init.defaultBranch main \
 # (PRIME_AGENT_HARNESS_VERSION in src/tau2/hyper/harnesses/prime.py). Prime's
 # install script only serves the latest release, which from 0.10.0 on is a
 # different build in a different layout, so the image installs the pinned
-# release's npm package from Prime's release bucket, checksum-verified.
+# release's npm package from Prime's release bucket, checksum-verified. npm
+# skips the dependencies' install scripts; zeromq's only checks that its
+# bundled prebuilt addon loads (Prime's kernel tools need it), so the last
+# line does that check.
 RUN curl -fsSL -o /tmp/prime-agent.tgz \
         "https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev/releases/v${PRIME_AGENT_VERSION}/prime-agent-${PRIME_AGENT_VERSION}.tgz" \
     && echo "${PRIME_AGENT_SHA256}  /tmp/prime-agent.tgz" | sha256sum -c - \
     && npm install --global /tmp/prime-agent.tgz \
     && rm /tmp/prime-agent.tgz \
-    && npm cache clean --force
+    && npm cache clean --force \
+    && cd /usr/local/lib/node_modules/prime-agent \
+    && node -e "require('zeromq')"
 
 # Prime routes every tool (ipython, filesystem, shell, MCP) through a Python
 # kernel it normally bootstraps by downloading Python 3.11 + PyPI packages on
