@@ -52,6 +52,13 @@ SKILLS = {
     "search": DeveloperSkill(
         "corpus-search", _SKILLS_SOURCE / "corpus-search" / "SKILL.md", True
     ),
+    # The author's search-only skill word for word: the tool paragraph is the
+    # always-visible description, the parameter table is the body.
+    "search-verbatim": DeveloperSkill(
+        "corpus-search",
+        _SKILLS_SOURCE / "corpus-search-verbatim" / "SKILL.md",
+        True,
+    ),
 }
 # The search_corpus run's skill, installed by --developer-corpus-search alone.
 CORPUS_SEARCH_SKILL = SKILLS["search-corpus"].source

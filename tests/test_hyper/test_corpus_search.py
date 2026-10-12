@@ -387,3 +387,24 @@ def test_skills_that_describe_search_need_the_tool():
             CodexSandboxBuilder(llm="gpt-5.6-sol", developer_skill=skill)
     with pytest.raises(ValueError, match="Unsupported developer skill"):
         CodexSandboxBuilder(llm="gpt-5.6-sol", developer_skill="playbook")
+
+
+def test_search_verbatim_skill_keeps_the_authors_description():
+    import yaml
+
+    builder = CodexSandboxBuilder(
+        llm="gpt-5.6-sol", corpus_search=True, developer_skill="search-verbatim"
+    )
+    files = builder.runtime_files(
+        include_client_tool=False, include_corpus_search_tool=True
+    )
+    skill = files["/runtime-home/.codex/skills/corpus-search/SKILL.md"]
+    front = yaml.safe_load(skill.split("---\n")[1])
+    assert front["name"] == "corpus-search"
+    # The whole tool paragraph is the always-visible description.
+    assert front["description"].startswith("Ask a yes/no question of every file")
+    assert front["description"].endswith("are listed as skipped.")
+    assert len(front["description"]) < 1024
+    assert skill.split("---\n", 2)[2].lstrip().startswith("**Parameters:**")
+    with pytest.raises(ValueError, match="--developer-corpus-search"):
+        CodexSandboxBuilder(llm="gpt-5.6-sol", developer_skill="search-verbatim")

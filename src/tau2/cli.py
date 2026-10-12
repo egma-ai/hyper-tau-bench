@@ -1139,8 +1139,9 @@ def main():
             "Experiment: install one skill for the Developer (codex harness "
             "only). 'method' is the scenario/procedure/policy method alone; "
             "'method-search' and 'search' describe search_corpus and need "
-            "--developer-corpus-search; 'search-corpus' is the search_corpus "
-            "run's skill."
+            "--developer-corpus-search; 'search-verbatim' is the search-only "
+            "skill exactly as its author wrote it; 'search-corpus' is the "
+            "search_corpus run's skill."
         ),
     )
     hyper_tau_parser.add_argument(

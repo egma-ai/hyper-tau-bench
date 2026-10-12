@@ -503,7 +503,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--developer-skill",
-        choices=("search-corpus", "method", "method-search", "search"),
+        choices=(
+            "search-corpus",
+            "method",
+            "method-search",
+            "search",
+            "search-verbatim",
+        ),
         help="experiment: the one skill the Developer gets (see tau2 hyper-tau "
         "--developer-skill)",
     )

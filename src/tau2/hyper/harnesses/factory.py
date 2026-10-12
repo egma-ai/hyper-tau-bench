@@ -16,9 +16,16 @@ DEVELOPER_AUTH_MODES = ("api-key", "chatgpt")
 # release's pin, which the paper's Codex rows used. The construction image
 # must be built with the same CODEX_VERSION.
 CODEX_VERSIONS = ("0.162.0", "0.144.6")
-# Experiment skills (codex harness only): the search_corpus run's skill, and
-# the telecom experiment's method, method + search and search-only versions.
-DEVELOPER_SKILLS = ("search-corpus", "method", "method-search", "search")
+# Experiment skills (codex harness only): the search_corpus run's skill, the
+# telecom experiment's method, method + search and search-only versions, and
+# the search-only skill exactly as its author wrote it (search-verbatim).
+DEVELOPER_SKILLS = (
+    "search-corpus",
+    "method",
+    "method-search",
+    "search",
+    "search-verbatim",
+)
 
 
 def create_developer_builder(
