@@ -6,6 +6,9 @@ ARG TAU2_SOURCE_REVISION=unknown
 ARG CODEX_VERSION=0.144.6
 ARG CLAUDE_CODE_VERSION=2.1.219
 ARG OPENCODE_VERSION=1.18.23
+ARG PRIME_AGENT_VERSION=0.8.0
+# sha256 of prime-agent-${PRIME_AGENT_VERSION}.tgz, from that release's SHA256SUMS
+ARG PRIME_AGENT_SHA256=f5b0093c7e0fddb73f94773d74383585456adfa84f12a4082d3098f23bb8fab6
 
 LABEL org.opencontainers.image.revision="${TAU2_SOURCE_REVISION}"
 
@@ -65,13 +68,17 @@ RUN git config --system init.defaultBranch main \
     && git config --system user.email "developer@workspace.local" \
     && git config --system --add safe.directory /workspace
 
-# Prime Agent ships through its versioned install script (sha256-verified
-# release download). The script must leave `prime-agent` on PATH; the
-# version-check RUN at the bottom fails the build visibly if it does not.
-RUN curl -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh \
-    && { command -v prime-agent \
-         || ln -s "$(find /root -maxdepth 4 -name prime-agent -type f \
-                     2>/dev/null | head -1)" /usr/local/bin/prime-agent; }
+# Prime Agent is pinned to the release the native harness records
+# (PRIME_AGENT_HARNESS_VERSION in src/tau2/hyper/harnesses/prime.py). Prime's
+# install script only serves the latest release, which from 0.10.0 on is a
+# different build in a different layout, so the image installs the pinned
+# release's npm package from Prime's release bucket, checksum-verified.
+RUN curl -fsSL -o /tmp/prime-agent.tgz \
+        "https://pub-728493de92a943e2a9b2d17b4719f318.r2.dev/releases/v${PRIME_AGENT_VERSION}/prime-agent-${PRIME_AGENT_VERSION}.tgz" \
+    && echo "${PRIME_AGENT_SHA256}  /tmp/prime-agent.tgz" | sha256sum -c - \
+    && npm install --global /tmp/prime-agent.tgz \
+    && rm /tmp/prime-agent.tgz \
+    && npm cache clean --force
 
 # Prime routes every tool (ipython, filesystem, shell, MCP) through a Python
 # kernel it normally bootstraps by downloading Python 3.11 + PyPI packages on
