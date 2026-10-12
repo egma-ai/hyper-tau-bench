@@ -9,15 +9,16 @@ construction harnesses' ``callback_mcp``. The sidecar holds all task
 state; this script holds none and imports nothing outside the standard
 library, so any Python 3.8+ in the main image can run it.
 
-    mcp_stub.py --dir /var/run/tau2-bridge --token T            # MCP server
-    mcp_stub.py --dir /var/run/tau2-bridge --token T call NAME '{...}'
-    mcp_stub.py --dir /var/run/tau2-bridge --token T list
+    mcp_stub.py --dir /var/run/hyper-tau-bridge --token T            # MCP server
+    mcp_stub.py --dir /var/run/hyper-tau-bridge --token T call NAME '{...}'
+    mcp_stub.py --dir /var/run/hyper-tau-bridge --token T list
 
-Some MCP clients cap how long one tool call may take (Codex defaults to
-60 seconds and Harbor's generated Codex config cannot raise it). With
-``--call-timeout N`` a call still running after N seconds returns a job id
-instead, and the extra ``wait_for_result`` tool keeps waiting for it; the
-call itself keeps running in the sidecar either way.
+By default a tool call blocks until the sidecar answers, as the native
+harnesses' callback server does. For an MCP client that caps a call below a
+tool's running time, ``--call-timeout N`` makes a call still running after
+N seconds return a job id instead, and the extra ``wait_for_result`` tool
+keeps waiting for it; the call itself keeps running in the sidecar either
+way.
 """
 
 from __future__ import annotations
@@ -224,7 +225,7 @@ def main(argv=None) -> int:
     )
     parser.add_argument("--token", default=os.environ.get("TAU2_BRIDGE_TOKEN", ""))
     parser.add_argument("--timeout", type=float, default=7200.0)
-    parser.add_argument("--server-name", default="tau2")
+    parser.add_argument("--server-name", default="hyper_tau")
     parser.add_argument(
         "--call-timeout",
         type=float,

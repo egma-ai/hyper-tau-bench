@@ -12,7 +12,7 @@ hidden task partitions, and serves the Developer tools (``run_local_test``,
 Construction ends at ``submit`` or, failing that, when the agent phase
 ends (Harbor runs ``finalize`` as a collect hook). Either way the runtime
 seals the Client API deployment, snapshots the workspace, and records the
-session for the verifier (:mod:`tau2.harbor.outer.verify`), which scores
+session for the verifier (:mod:`tau2.harbor.verify`), which scores
 the snapshot with the sealed inner loop.
 """
 

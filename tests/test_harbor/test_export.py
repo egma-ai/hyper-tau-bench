@@ -8,12 +8,12 @@ import tomllib
 import pytest
 import yaml
 
-from tau2.harbor.outer.export import (
-    OuterExportOptions,
+from tau2.harbor.export import (
+    ExportOptions,
     _memory_mb,
-    export_outer_tasks,
+    export_tasks,
 )
-from tau2.harbor.outer.runtime import CONFIG_ENV_VAR, TOKEN_ENV_VAR, ConstructionConfig
+from tau2.harbor.runtime import CONFIG_ENV_VAR, TOKEN_ENV_VAR, ConstructionConfig
 from tau2.hyper.sandbox.orchestrator import SandboxOrchestrator
 
 NO_CLIENT_TASK = "008_retail_plus_construction_core_evidence_performance_hard"
@@ -24,12 +24,10 @@ OPENING = "Hi, I run airline support. Rebooking fees are $25 (or ${FEE})."
 
 
 def export(tmp_path, *task_ids, **kwargs):
-    options = OuterExportOptions(
-        output_dir=tmp_path / "dataset", task_ids=list(task_ids)
-    )
+    options = ExportOptions(output_dir=tmp_path / "dataset", task_ids=list(task_ids))
     for key, value in kwargs.items():
         setattr(options, key, value)
-    return export_outer_tasks(options)
+    return export_tasks(options)
 
 
 def compose_value(value: str) -> str:
@@ -70,6 +68,7 @@ def test_exports_a_complete_construction_task(tmp_path, client_openings):
     )
     assert files == [
         "environment/Dockerfile",
+        "environment/codex-config.toml",
         "environment/docker-compose.yaml",
         "environment/hyper-tau-tool",
         "environment/mcp_stub.py",
@@ -93,12 +92,12 @@ def test_exports_a_complete_construction_task(tmp_path, client_openings):
     assert config["verifier"]["environment_mode"] == "separate"
     (hook,) = config["verifier"]["collect"]
     assert hook["service"] == "hyper-runtime"
-    assert "tau2.harbor.outer.runtime finalize" in hook["command"]
+    assert "tau2.harbor.runtime finalize" in hook["command"]
     assert config["environment"]["workdir"] == "/workspace"
     (server,) = config["environment"]["mcp_servers"]
     assert server["name"] == "hyper_tau"
     assert server["args"][:2] == ["-I", "/opt/hyper-tau-harbor/mcp_stub.py"]
-    assert server["args"][server["args"].index("--call-timeout") + 1] == "50"
+    assert "--call-timeout" not in server["args"]
     token = server["args"][server["args"].index("--token") + 1]
 
     services = compose["services"]
@@ -136,10 +135,21 @@ def test_exports_a_complete_construction_task(tmp_path, client_openings):
     assert instruction.startswith("Work autonomously as the Developer")
     assert "28800 seconds" in instruction
     assert "talk_to_client(message)" not in instruction
-    assert "`wait_for_result`" in instruction
+    assert "wait_for_result" not in instruction
     assert "hyper-tau-tool" in instruction
     dockerfile = (task_dir / "environment" / "Dockerfile").read_text()
     assert dockerfile.startswith("FROM tau2-construction-runtime:contract-v7\n")
+    # Tool calls may run as long as native runs allow, in Claude Code and in
+    # Codex (whose system config Harbor's own config is merged over).
+    assert "MCP_TOOL_TIMEOUT=28800000" in dockerfile
+    assert "COPY codex-config.toml /etc/codex/config.toml" in dockerfile
+    codex = tomllib.loads((task_dir / "environment" / "codex-config.toml").read_text())
+    assert codex["mcp_servers"]["hyper_tau"] == {
+        "command": server["command"],
+        "args": server["args"],
+        "startup_timeout_sec": 30,
+        "tool_timeout_sec": 28800,
+    }
     assert token in (task_dir / "environment" / "hyper-tau-tool").read_text()
     assert "hyper-tau-tool submit" in (task_dir / "solution" / "solve.sh").read_text()
 
@@ -173,11 +183,12 @@ def test_client_opening_is_fixed_at_export_and_reused(tmp_path, client_openings)
     assert client_openings == [CLIENT_TASK, CLIENT_TASK]
 
 
-def test_soft_call_timeout_can_be_disabled(tmp_path, client_openings):
-    (task_dir,) = export(tmp_path, NO_CLIENT_TASK, mcp_call_timeout_sec=0)
+def test_soft_call_timeout_is_opt_in(tmp_path, client_openings):
+    (task_dir,) = export(tmp_path, NO_CLIENT_TASK, mcp_call_timeout_sec=50)
     config, _, _ = load(task_dir)
-    assert "--call-timeout" not in config["environment"]["mcp_servers"][0]["args"]
-    assert "wait_for_result" not in (task_dir / "instruction.md").read_text()
+    args = config["environment"]["mcp_servers"][0]["args"]
+    assert args[args.index("--call-timeout") + 1] == "50"
+    assert "`wait_for_result`" in (task_dir / "instruction.md").read_text()
 
 
 def test_unknown_tasks_and_network_modes_are_rejected(tmp_path):

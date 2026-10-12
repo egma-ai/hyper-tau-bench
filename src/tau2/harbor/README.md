@@ -1,26 +1,28 @@
 # Running τ^τ-bench on Harbor
 
-`tau2 harbor` exports the benchmark as [Harbor](https://github.com/harbor-framework/harbor)
-datasets (task format `schema_version = "1.4"`). Each exported task is a plain
-Harbor task directory, so `harbor run -p <dataset> -a <agent> -m <model>`
-runs it with any Harbor agent, and Harbor's job tooling (attempts,
-concurrency, retries, result viewers) applies unchanged.
-
-| Command | The Harbor agent plays | One task |
-|---------|------------------------|----------|
-| `tau2 harbor export-outer` | the Developer | one Hyper-τ construction task |
-| `tau2 harbor export-inner` | the customer-service agent | one τ³ conversation |
-
-Both need two images:
+`tau2 harbor export` writes the Hyper-τ construction tasks as a
+[Harbor](https://github.com/harbor-framework/harbor) dataset (task format
+`schema_version = "1.4"`). Each exported task is a plain Harbor task
+directory, so `harbor run -p <dataset> -a <agent> -m <model>` benchmarks any
+Harbor agent as the Developer, and Harbor's job tooling (attempts,
+concurrency, retries, result viewers) applies unchanged. The task's verifier
+scores the agent the Developer built on the hidden test conversations, as
+`tau2 hyper-tau` does, so one Harbor task covers both loops.
 
 ```bash
 make harbor-images
+uv run tau2 harbor export --output-dir harbor/hyper-tau          # every release task
+uv run tau2 harbor export --output-dir harbor/hyper-tau --source-domain retail_plus
+harbor run -p harbor/hyper-tau -a codex -m openai/gpt-5.5 --env-file .env
 ```
 
+## Images
+
+`make harbor-images` builds the two images exported tasks use:
+
 - `tau2-construction-runtime:contract-v7` (`make hyper-construction-image`)
-  is the construction runtime of `tau2 hyper-tau`: the agent's container in
-  construction tasks, and the sealed `candidate` service that runs the
-  Developer's code.
+  is the construction runtime of `tau2 hyper-tau`: the agent's container,
+  and the sealed `candidate` service that runs the Developer's code.
 - `tau2-harbor-runtime:local` (`make harbor-runtime-image`,
   [`docker/harbor-runtime/`](../../../docker/harbor-runtime/)) is the trusted
   runtime: the full source and data, the simulators and the scorers. Agents
@@ -29,13 +31,7 @@ make harbor-images
 Exports name the images they use (`--runtime-image`, `--construction-image`),
 so a registry tag works as well as a local one.
 
-## Construction tasks (outer loop)
-
-```bash
-uv run tau2 harbor export-outer --output-dir harbor/hyper-tau          # every release task
-uv run tau2 harbor export-outer --output-dir harbor/hyper-tau --source-domain retail_plus
-harbor run -p harbor/hyper-tau -a codex -m openai/gpt-5.5 --env-file .env
-```
+## What a task runs
 
 The instruction is the brief `tau2 hyper-tau` gives its Developer harness,
 plus how to reach the tools in this environment. The task runs four
@@ -71,29 +67,14 @@ performance requirements applied.
 `OuterLoopResult` that `tau2 hyper-tau` records, including every scored
 conversation.
 
-What differs from `tau2 hyper-tau`:
-
-- **The Developer harness is Harbor's agent.** Harbor installs and configures
-  it, so its version and settings are Harbor's, not the ones pinned in the
-  construction image, and Harbor records its trajectory. The session record
-  in the artifact lists the Developer tool calls only.
-- **The Developer's own model calls go straight to the provider** through
-  Harbor's egress allowlist (extend it with `--allowed-host` at export or
-  `--allow-agent-host` at run time) instead of through the model gateway.
-- **The Client's opening is fixed per export.** It is part of the
-  instruction, so `export-outer` asks the Client for it once (one call to
-  the Client's model, which needs its key) and every trial of the task starts
-  from it. Re-exporting reuses it; `--regenerate-client-openings` asks again.
-- **Candidate sessions share one locked-down service** instead of starting a
-  `docker run` container each, because the trusted side has no Docker
-  daemon. Each session still gets its own uid, home, and temp directory.
-- **Long tool calls and Codex.** Codex gives an MCP call 60 seconds and
-  Harbor's generated Codex config cannot raise that, while local tests, live
-  experiments, and sample scenarios can run for minutes. A call still
-  running after 50 seconds therefore returns a job id, and the extra
-  `wait_for_result` tool keeps waiting for it (`--mcp-call-timeout`; 0
-  disables). Agents without MCP support can use the same tools from a shell
-  with `hyper-tau-tool`.
+Tool calls block until they finish, as in native runs. Local tests, live
+experiments and sample scenarios can run for minutes, so the agent's
+container gives Claude Code (`MCP_TOOL_TIMEOUT`) and Codex (a system
+`/etc/codex/config.toml`, which Codex merges under the config Harbor writes)
+the per-call limit the native harnesses use: the construction budget.
+Without it, the pinned Codex stops waiting for a call after five minutes.
+Agents without MCP support can use the same tools from a shell with
+`hyper-tau-tool`.
 
 Harbor's `oracle` agent runs `solution/solve.sh`. Construction has no
 reference build, so it submits the starting kit unchanged: a check of the
@@ -104,44 +85,39 @@ The agent phase defaults to the task's eight-hour budget
 `TAU2_HYPER_INNER_MAX_WORKERS` in the environment Harbor runs in to change
 that.
 
-## Conversation tasks (inner loop)
+## What differs from `tau2 hyper-tau`
 
-```bash
-uv run tau2 harbor export-inner --domain retail_plus --output-dir harbor/tau3-retail_plus
-uv run tau2 harbor export-inner --domain banking_knowledge --output-dir harbor/tau3-banking \
-    --retrieval-config bm25
-harbor run -p harbor/tau3-retail_plus -a claude-code -m anthropic/claude-sonnet-5 --env-file .env
-```
+- **The Developer harness is Harbor's agent.** Harbor configures and launches
+  it with its own settings and records its trajectory. Codex and Claude Code
+  are already in the construction image at their pinned versions, so Harbor
+  uses those unless a run asks for another version; any other agent Harbor
+  installs itself. The session record in the artifact lists the Developer
+  tool calls only.
+- **The Developer's own model calls go straight to the provider** through
+  Harbor's egress allowlist (extend it with `--allowed-host` at export or
+  `--allow-agent-host` at run time) instead of through the model gateway.
+- **The Client's opening is fixed per export.** It is part of the
+  instruction, so `tau2 harbor export` asks the Client for it once (one call
+  to the Client's model, which needs its key) and every trial of the task
+  starts from it. Re-exporting reuses it; `--regenerate-client-openings`
+  asks again.
+- **Candidate sessions share one locked-down service** instead of starting a
+  `docker run` container each, because the trusted side has no Docker
+  daemon. Each session still gets its own uid, home, and temp directory.
 
-The agent gets the domain policy as its instruction and talks to the
-customer only through the `tau2` MCP server: `start_conversation` returns the
-customer's first message, `send_message_to_user` returns the customer's
-reply, `end_conversation` ends it, and the domain tools act on the
-customer's records. The agent's container holds nothing else. The
-`tau-runtime` sidecar runs the tau2 orchestrator, the user simulator, and the
-domain environment; the verifier scores the recorded conversation with the
-tau2 evaluator (`--evaluation-type`, default `all`), and `reward.json` holds
-the task reward and its breakdown.
-
-The user simulator defaults to Hyper-τ's inner-loop user model. Set
-`TAU2_HARBOR_USER_LLM` and `TAU2_HARBOR_USER_LLM_ARGS` (JSON) in Harbor's
-environment to swap it for a run without re-exporting. `oracle` replays the
-task's reference actions, so it should score 1.0.
-
-The canonical `airline` and `retail` domains are frozen legacy baselines;
-export `airline_plus` and `retail_plus` (or pass `--allow-legacy-domain` for
-an ablation).
+An agent whose MCP client caps a tool call below the tools' running time can
+still run the tasks: export with `--mcp-call-timeout N`, and a call still
+running after N seconds returns a job id that the extra `wait_for_result`
+tool keeps waiting on. Codex and Claude Code do not need it.
 
 ## Keys
 
 Pass the provider keys to Harbor's process (`--env-file .env`). Harbor
-forwards them to the trusted sidecars and the verifier only; the agent gets
+forwards them to the trusted sidecar and the verifier only; the agent gets
 the keys its own harness needs from Harbor, as for any task.
 
-`banking_knowledge` construction tasks run their conversations in the
-domain's default retrieval configuration (`alltools`), which searches the
-knowledge base with OpenAI embeddings, so they also need `OPENAI_API_KEY`.
-Each container starts with an empty embeddings cache, so `hyper-runtime` and
-the verifier each embed the knowledge base once, before any conversation
-runs. Conversation tasks use the retrieval configuration chosen at export
-(`bm25` unless `--retrieval-config` says otherwise).
+`banking_knowledge` tasks run their conversations in the domain's default
+retrieval configuration (`alltools`), which searches the knowledge base with
+OpenAI embeddings, so they also need `OPENAI_API_KEY`. Each container starts
+with an empty embeddings cache, so `hyper-runtime` and the verifier each
+embed the knowledge base once, before any conversation runs.

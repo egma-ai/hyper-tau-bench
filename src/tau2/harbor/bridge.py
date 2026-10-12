@@ -1,10 +1,9 @@
 """Trusted end of the file bridge between a Harbor main container and a sidecar.
 
-The agent's MCP client runs :mod:`tau2.harbor.mcp_stub` (or, for the
-construction loop, ``tau2.hyper.sandbox.callback_mcp``) inside ``main``. The
-stub writes each request into a directory shared with the sidecar; this
-module answers them there, through the same file protocol as the
-construction harnesses' ``CallbackBroker``.
+The agent's MCP client runs :mod:`tau2.harbor.mcp_stub` inside ``main``.
+The stub writes each request into a directory shared with the
+``hyper-runtime`` sidecar; this module answers them there, through the same
+file protocol as the construction harnesses' ``CallbackBroker``.
 """
 
 from __future__ import annotations
@@ -40,8 +39,8 @@ class ToolResult:
 class ToolBridge:
     """Serve a tool table to the main container's MCP stub.
 
-    Calls run one at a time, in arrival order: a conversation (or a
-    construction session) is a single sequential thread of actions.
+    Calls run one at a time, in arrival order: a construction session is a
+    single sequential thread of actions.
     """
 
     def __init__(

@@ -103,7 +103,9 @@ def test_slow_calls_return_a_job_to_wait_on_when_capped(serve):
 
     bridge_dir = serve(slow, list_tools=lambda: [{"name": "slow"}])
     server = mcp_stub.Server(
-        mcp_stub.Bridge(bridge_dir, "token", timeout=30), name="tau2", call_timeout=0.3
+        mcp_stub.Bridge(bridge_dir, "token", timeout=30),
+        name="hyper_tau",
+        call_timeout=0.3,
     )
     listed, first = rpc(
         server,
@@ -135,7 +137,9 @@ def test_slow_calls_return_a_job_to_wait_on_when_capped(serve):
 def test_fast_calls_are_unchanged_when_capped(serve):
     bridge_dir = serve(lambda name, arguments: ToolResult("quick"))
     server = mcp_stub.Server(
-        mcp_stub.Bridge(bridge_dir, "token", timeout=30), name="tau2", call_timeout=5
+        mcp_stub.Bridge(bridge_dir, "token", timeout=30),
+        name="hyper_tau",
+        call_timeout=5,
     )
     (response,) = rpc(server, call(1, "fast"))
     assert response["result"] == {
@@ -145,7 +149,7 @@ def test_fast_calls_are_unchanged_when_capped(serve):
 
 
 def test_initialize_falls_back_to_a_supported_protocol_version():
-    server = mcp_stub.Server(mcp_stub.Bridge(None, "t", timeout=1), name="tau2")
+    server = mcp_stub.Server(mcp_stub.Bridge(None, "t", timeout=1), name="hyper_tau")
     response = server.handle(
         {
             "jsonrpc": "2.0",

@@ -1,11 +1,11 @@
-# Trusted runtime for the Harbor tasks `tau2 harbor` exports.
+# Trusted runtime for the Harbor tasks `tau2 harbor export` writes.
 #
 # It carries the full tau2 source and data (domains, Hyper-τ tasks and
 # evidence, model routing) and runs only on the trusted side of a task: the
-# inner-loop `tau-runtime` sidecar, the construction `hyper-runtime` sidecar,
-# and both verifiers. Harbor agents and Developer-written candidate code
-# never run in this image (the agent's container and the sealed `candidate`
-# service use the construction runtime image instead).
+# `hyper-runtime` sidecar and the verifier. Harbor agents and
+# Developer-written candidate code never run in this image (the agent's
+# container and the sealed `candidate` service use the construction runtime
+# image instead).
 FROM node:24-bookworm-slim AS node-runtime
 
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
@@ -49,8 +49,7 @@ COPY data/tau2 ./data/tau2
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --extra knowledge \
     && .venv/bin/python -c \
-        "import tau2.harbor.inner.runtime, tau2.harbor.inner.verify, \
-tau2.harbor.outer.runtime, tau2.harbor.outer.verify; \
+        "import tau2.harbor.runtime, tau2.harbor.verify; \
 from tau2.knowledge.sandbox_manager import _check_sandbox_dependencies; \
 _check_sandbox_dependencies()"
 

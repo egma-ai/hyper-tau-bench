@@ -28,7 +28,7 @@ from typing import Any, Optional
 from loguru import logger
 
 from tau2.harbor.common import warm_knowledge_base, write_json_atomic, write_reward
-from tau2.harbor.outer.runtime import (
+from tau2.harbor.runtime import (
     STATE_DIR,
     STATE_FILE,
     SUBMISSION_FILE,

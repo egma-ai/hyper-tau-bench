@@ -105,35 +105,27 @@ driver class in `src/tau2/hyper/harnesses/`.
 
 ## Running on Harbor
 
-Both loops also run as [Harbor](https://github.com/harbor-framework/harbor)
-datasets, so any agent Harbor supports can be benchmarked as the Developer, or
-as the customer-service agent of the τ³ inner loop.
-
-| Command | The Harbor agent plays | One Harbor task | Reward |
-|---------|------------------------|-----------------|--------|
-| `tau2 harbor export-outer` | the Developer | one construction task: the kit in `/workspace`, the Developer tools on the `hyper_tau` MCP server | the final Hyper-τ reward, scored as `tau2 hyper-tau` scores it |
-| `tau2 harbor export-inner` | the customer-service agent | one customer conversation, with the domain tools on the `tau2` MCP server | the tau2 task reward |
+The release tasks also run as a [Harbor](https://github.com/harbor-framework/harbor)
+dataset, so any agent Harbor supports can be benchmarked as the Developer.
+Each Harbor task is one construction task: the kit in `/workspace`, the
+Developer tools on the `hyper_tau` MCP server, and a verifier that scores the
+built agent on the hidden test conversations with the same code as
+`tau2 hyper-tau`. `reward` is the final Hyper-τ reward.
 
 ```bash
 # The construction runtime (the agent's container and the sealed candidate)
 # and the trusted runtime (simulators, hidden tasks, scoring)
 make harbor-images
 
-# Outer loop: build an agent
-uv run tau2 harbor export-outer --output-dir harbor/hyper-tau \
+uv run tau2 harbor export --output-dir harbor/hyper-tau \
     --task-ids 002_airline_plus_construction_core_evidence_seeded_performance_hard
 harbor run -p harbor/hyper-tau -a codex -m openai/gpt-5.5 --env-file .env
-
-# Inner loop: serve customers
-uv run tau2 harbor export-inner --domain retail_plus --output-dir harbor/tau3-retail_plus
-harbor run -p harbor/tau3-retail_plus -a claude-code -m anthropic/claude-sonnet-5 --env-file .env
 ```
 
 The Client, the user simulator, the hidden tasks, and the model keys stay in a
 trusted sidecar and a separate verifier; during the agent phase the agent's
-container reaches only model-provider hosts. Harbor's `oracle` agent runs each
-task's reference solution: the reference actions for a conversation, and the
-untouched starting kit for a construction task. See
+container reaches only model-provider hosts. Harbor's `oracle` agent submits
+the untouched starting kit, a check of the whole pipeline. See
 [`src/tau2/harbor/README.md`](src/tau2/harbor/README.md) for the task layout,
 the trust boundary, and how a Harbor run differs from `tau2 hyper-tau`.
 
@@ -262,7 +254,7 @@ ask for build trajectories or rerun a sample of tasks before merging.
 | Path | Contents |
 |------|----------|
 | `src/tau2/hyper/` | The τ^τ outer loop: sandbox runtime, harness adapters, client simulator, evidence transformations, client REST API subsystem, scoring |
-| `src/tau2/harbor/` | Harbor exports of both loops: task exporters, trusted sidecar runtimes, verifiers, and the MCP bridge |
+| `src/tau2/harbor/` | Harbor export of the construction tasks: exporter, trusted sidecar runtime, verifier, and the MCP bridge |
 | `src/tau2/` (rest) | The τ³-bench inner loop this repo builds on: orchestrator, domains, user simulator, evaluation |
 | `data/tau2/hyper/` | Task definitions, compiled evidence bundles, SOP corpora and renders, seeded workspaces |
 | `web/leaderboard/` | Standalone results site and build-trajectory visualizer |

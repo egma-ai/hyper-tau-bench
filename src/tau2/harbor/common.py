@@ -89,11 +89,6 @@ def new_token() -> str:
     return secrets.token_hex(24)
 
 
-def toml_string(value: str) -> str:
-    """Quote a string for TOML (JSON string syntax is valid TOML)."""
-    return json.dumps(value)
-
-
 def provider_env(template: str = "${{{name}:-}}") -> dict[str, str]:
     """Map each provider key variable to a Harbor/compose interpolation."""
     return {name: template.format(name=name) for name in PROVIDER_KEY_ENV_VARS}

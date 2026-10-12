@@ -1,4 +1,4 @@
-"""Tests for the outer-loop (Hyper-τ construction) Harbor runtime and verifier."""
+"""Tests for the Harbor construction runtime and verifier."""
 
 from __future__ import annotations
 
@@ -13,10 +13,10 @@ from loguru import logger
 
 from tau2.data_model.message import AssistantMessage
 from tau2.harbor import mcp_stub
+from tau2.harbor import runtime as harbor_runtime
+from tau2.harbor import verify as harbor_verify
 from tau2.harbor.common import warm_knowledge_base
-from tau2.harbor.outer import runtime as outer_runtime
-from tau2.harbor.outer import verify as outer_verify
-from tau2.harbor.outer.runtime import (
+from tau2.harbor.runtime import (
     FINALIZED_FILE,
     STATE_FILE,
     SUBMISSION_FILE,
@@ -106,7 +106,7 @@ def test_runtime_serves_the_developer_tools_and_records_the_submission(tmp_path)
     assert (tmp_path / "state" / FINALIZED_FILE).read_text().strip() == "submitted"
 
     unpacked = tmp_path / "unpacked"
-    outer_verify.extract_submission(tmp_path / "state" / SUBMISSION_FILE, unpacked)
+    harbor_verify.extract_submission(tmp_path / "state" / SUBMISSION_FILE, unpacked)
     assert "return 'built'" in (unpacked / "workspace" / "agent.py").read_text()
     assert (unpacked / ".git").is_dir()
     # Finalizing again (the collect hook after a submit) changes nothing.
@@ -150,13 +150,13 @@ def test_runtime_resumes_the_exported_client_opening(tmp_path, monkeypatch):
 
 
 def test_runtime_main_needs_a_bridge_token(tmp_path, monkeypatch):
-    monkeypatch.delenv(outer_runtime.TOKEN_ENV_VAR, raising=False)
+    monkeypatch.delenv(harbor_runtime.TOKEN_ENV_VAR, raising=False)
     monkeypatch.setenv(
-        outer_runtime.CONFIG_ENV_VAR,
+        harbor_runtime.CONFIG_ENV_VAR,
         ConstructionConfig(task_id=NO_CLIENT_TASK).to_json(),
     )
     with pytest.raises(ValueError, match="bridge token"):
-        outer_runtime.main(["serve", "--state-dir", str(tmp_path)])
+        harbor_runtime.main(["serve", "--state-dir", str(tmp_path)])
 
 
 def _add(bundle: tarfile.TarFile, info: tarfile.TarInfo, data: bytes = b"") -> None:
@@ -185,7 +185,7 @@ def test_extract_submission_skips_entries_that_escape_the_workspace(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "stale.txt").write_text("left over")
-    outer_verify.extract_submission(archive, workspace)
+    harbor_verify.extract_submission(archive, workspace)
 
     assert (workspace / "workspace" / "agent.py").read_text() == "print('ok')\n"
     assert os.readlink(workspace / "workspace" / "alias.py") == "agent.py"
@@ -197,12 +197,12 @@ def test_extract_submission_skips_entries_that_escape_the_workspace(tmp_path):
 
 
 def test_verifier_refuses_a_session_that_was_never_finalized(tmp_path):
-    with pytest.raises(outer_verify.SubmissionError, match="No construction record"):
-        outer_verify.load_state(tmp_path)
+    with pytest.raises(harbor_verify.SubmissionError, match="No construction record"):
+        harbor_verify.load_state(tmp_path)
     runtime = make_runtime(tmp_path)
     runtime.stop()
-    with pytest.raises(outer_verify.SubmissionError, match="never finalized"):
-        outer_verify.load_state(tmp_path / "state")
+    with pytest.raises(harbor_verify.SubmissionError, match="never finalized"):
+        harbor_verify.load_state(tmp_path / "state")
 
 
 def test_verifier_scores_the_snapshot_with_the_recorded_session(tmp_path, monkeypatch):
@@ -237,7 +237,7 @@ def test_verifier_scores_the_snapshot_with_the_recorded_session(tmp_path, monkey
     monkeypatch.setattr(SandboxOrchestrator, "score_submission", score_submission)
     scored_workspace = tmp_path / "scored"
     log_dir = tmp_path / "verifier"
-    outer_verify.main(
+    harbor_verify.main(
         [
             "--state-dir",
             str(tmp_path / "state"),
@@ -255,7 +255,7 @@ def test_verifier_scores_the_snapshot_with_the_recorded_session(tmp_path, monkey
         "performance_reward": 1.0,
         "performance_penalty": 0.25,
     }
-    result = json.loads((log_dir / outer_verify.RESULT_FILE).read_text())
+    result = json.loads((log_dir / harbor_verify.RESULT_FILE).read_text())
     assert result["final_test_reward"] == 0.25
 
     state = read_state(tmp_path)
@@ -284,7 +284,7 @@ def test_verifier_points_out_conversations_that_errored():
     messages = []
     sink = logger.add(messages.append, level="WARNING", format="{message}")
     try:
-        outer_verify.log_scoring_errors(result)
+        harbor_verify.log_scoring_errors(result)
     finally:
         logger.remove(sink)
     assert len(messages) == 1

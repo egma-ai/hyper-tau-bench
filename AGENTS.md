@@ -82,7 +82,7 @@ src/tau2/
 ├── environment/     # Environment, DB, server, toolkit base classes
 ├── evaluator/       # Task evaluation logic
 ├── gym/             # Gymnasium-compatible RL interface
-├── harbor/          # Harbor exports of both loops (`tau2 harbor export-inner|export-outer`): exporters, trusted sidecar runtimes, verifiers, MCP bridge
+├── harbor/          # Harbor export of the construction tasks (`tau2 harbor export`): exporter, trusted sidecar runtime, verifier, MCP bridge
 ├── hyper/           # The τ^τ outer loop (Client ⇄ Developer ⇄ sandbox construction wrapping the τ³ inner loop); registered as hyper_<base> domains for task discovery. The CLI entry point is `tau2 hyper-tau`.
 ├── knowledge/       # Knowledge retrieval pipeline (embedders, retrievers, postprocessors, sandbox)
 ├── metrics/         # Metrics computation

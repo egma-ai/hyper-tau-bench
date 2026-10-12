@@ -9,7 +9,7 @@ four containers:
   holds only a stdio MCP server (:mod:`tau2.harbor.mcp_stub`, served as
   ``hyper_tau``) that relays the Developer tools to ``hyper-runtime``, and a
   ``hyper-tau-tool`` shell wrapper for agents without MCP support.
-- ``hyper-runtime`` — the trusted sidecar (:mod:`tau2.harbor.outer.runtime`):
+- ``hyper-runtime`` — the trusted sidecar (:mod:`tau2.harbor.runtime`):
   it builds the kit, holds the Client simulator, the hidden task partitions
   and the model credentials, and serves ``run_local_test``,
   ``talk_to_client``, ``run_live_experiment``, ``run_sample_scenarios`` and
@@ -22,10 +22,16 @@ four containers:
   trusted side, as in ``tau2 hyper-tau``.
 - the verifier (``tests/``) — the runtime image with a fresh ``candidate``
   service; it unpacks the snapshot and scores it on the hidden test
-  partition (:mod:`tau2.harbor.outer.verify`).
+  partition (:mod:`tau2.harbor.verify`).
 
 The Client's opening message is part of the brief, so it is generated once
 per task at export time (one Client model call) and fixed in the task.
+
+Tool calls get the per-call limit the native harnesses give them (the
+construction budget), so long local tests and sample-scenario runs simply
+block until they finish: Claude Code reads it from ``MCP_TOOL_TIMEOUT``,
+and Codex from a system config (``/etc/codex/config.toml``) under the one
+Harbor writes.
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+import toml
 from loguru import logger
 
 from tau2.harbor import mcp_stub
@@ -50,7 +57,7 @@ from tau2.harbor.common import (
     task_slug,
     write_task,
 )
-from tau2.harbor.outer.runtime import (
+from tau2.harbor.runtime import (
     BRIDGE_DIR,
     CONFIG_ENV_VAR,
     READY_FILE,
@@ -81,7 +88,8 @@ STUB_PYTHON = "/usr/local/bin/python3"
 TOOL_COMMAND = "/usr/local/bin/hyper-tau-tool"
 CANDIDATE_HOST_SCRIPT = "/opt/tau2/src/tau2/hyper/sandbox/candidate_host.py"
 CANDIDATE_ENDPOINT = f"{CANDIDATE_SERVICE}:{DEFAULT_PORT}"
-DEFAULT_MCP_CALL_TIMEOUT_SEC = 50.0
+CODEX_SYSTEM_CONFIG = "/etc/codex/config.toml"
+CODEX_STARTUP_TIMEOUT_SEC = 30
 
 HARBOR_NOTES = """\
 ## Working in this environment
@@ -104,7 +112,7 @@ quota again.
 
 
 @dataclass
-class OuterExportOptions:
+class ExportOptions:
     """What to export and how the exported tasks run."""
 
     output_dir: Path
@@ -124,12 +132,16 @@ class OuterExportOptions:
     # Default: the task's wall-clock construction budget (eight hours).
     agent_timeout_sec: Optional[float] = None
     verifier_timeout_sec: float = 14400.0
-    mcp_call_timeout_sec: float = DEFAULT_MCP_CALL_TIMEOUT_SEC
+    # Off by default: tool calls block until they finish, as in native runs.
+    # For an MCP client that caps a call below a tool's running time, a call
+    # still running after this many seconds returns a job id instead, for
+    # the extra wait_for_result tool.
+    mcp_call_timeout_sec: float = 0.0
     reuse_client_openings: bool = True
     allow_legacy_domain: bool = False
 
 
-def load_construction_tasks(options: OuterExportOptions) -> list[HyperTask]:
+def load_construction_tasks(options: ExportOptions) -> list[HyperTask]:
     if options.task_ids:
         tasks = [
             load_active_hyper_tau_task(
@@ -161,7 +173,7 @@ def previous_client_opening(task_dir: Path, task_id: str, client_llm: str) -> st
     return str(metadata.get("client_opening") or "")
 
 
-def export_outer_tasks(options: OuterExportOptions) -> list[Path]:
+def export_tasks(options: ExportOptions) -> list[Path]:
     """Write one Harbor task per Hyper-τ construction task."""
     if options.agent_network not in ("allowlist", "public"):
         raise ValueError(f"Unknown agent network mode {options.agent_network!r}")
@@ -172,13 +184,13 @@ def export_outer_tasks(options: OuterExportOptions) -> list[Path]:
     written = []
     for task in tasks:
         task_dir = output_dir / task_slug(task.id)
-        write_outer_task(task_dir, task, options)
+        write_construction_task(task_dir, task, options)
         written.append(task_dir)
     logger.info(f"Wrote {len(written)} Harbor tasks to {output_dir}")
     return written
 
 
-def write_outer_task(task_dir: Path, task: HyperTask, options: OuterExportOptions):
+def write_construction_task(task_dir: Path, task: HyperTask, options: ExportOptions):
     sandbox_config = dict(task.hyper.sandbox_config or {})
     budget = BuildBudget(
         max_steps=sandbox_config.get("max_steps", 0),
@@ -242,6 +254,23 @@ def write_outer_task(task_dir: Path, task: HyperTask, options: OuterExportOption
     ]
     if options.mcp_call_timeout_sec > 0:
         stub_args += ["--call-timeout", f"{options.mcp_call_timeout_sec:g}"]
+    # Codex merges the config Harbor writes for the task's MCP server over
+    # this system config, so the server keeps Harbor's entry and gains the
+    # native per-call limit; without it the pinned Codex gives up on a call
+    # after five minutes. The entry is complete on its own in case Harbor's
+    # config leaves it out.
+    codex_config = toml.dumps(
+        {
+            "mcp_servers": {
+                MCP_SERVER_NAME: {
+                    "command": STUB_PYTHON,
+                    "args": stub_args,
+                    "startup_timeout_sec": CODEX_STARTUP_TIMEOUT_SEC,
+                    "tool_timeout_sec": budget.max_time_seconds,
+                }
+            }
+        }
+    )
 
     agent: dict = {"timeout_sec": float(budget.max_time_seconds)}
     if options.agent_network == "allowlist":
@@ -257,7 +286,7 @@ def write_outer_task(task_dir: Path, task: HyperTask, options: OuterExportOption
         [
             "python",
             "-m",
-            "tau2.harbor.outer.runtime",
+            "tau2.harbor.runtime",
             "finalize",
             "--state-dir",
             str(STATE_DIR),
@@ -286,7 +315,6 @@ def write_outer_task(task_dir: Path, task: HyperTask, options: OuterExportOption
         },
         "metadata": {
             "benchmark": "hyper-tau",
-            "loop": "outer",
             "task_id": task.id,
             "source_domain": task.source_domain,
             "client_enabled": client_enabled,
@@ -341,7 +369,7 @@ def write_outer_task(task_dir: Path, task: HyperTask, options: OuterExportOption
     runtime_command = [
         "python",
         "-m",
-        "tau2.harbor.outer.runtime",
+        "tau2.harbor.runtime",
         "serve",
         "--state-dir",
         str(STATE_DIR),
@@ -417,8 +445,11 @@ def write_outer_task(task_dir: Path, task: HyperTask, options: OuterExportOption
         f"COPY mcp_stub.py {STUB_PATH}\n"
         f"COPY hyper-tau-tool {TOOL_COMMAND}\n"
         f"RUN chmod 0755 {TOOL_COMMAND} && mkdir -p {BRIDGE_DIR} {WORKSPACE}\n"
-        "# Tests, live experiments and sample scenarios can run for minutes.\n"
+        "# Local tests, live experiments and sample scenarios can run for\n"
+        "# minutes. Tool calls get the per-call limit native runs give them:\n"
+        "# Claude Code reads MCP_TOOL_TIMEOUT, Codex the system config.\n"
         f"ENV MCP_TIMEOUT=60000 MCP_TOOL_TIMEOUT={budget.max_time_seconds * 1000}\n"
+        f"COPY codex-config.toml {CODEX_SYSTEM_CONFIG}\n"
         f"WORKDIR {WORKSPACE}\n"
     )
     test_script = (
@@ -430,7 +461,7 @@ def write_outer_task(task_dir: Path, task: HyperTask, options: OuterExportOption
             [
                 "python",
                 "-m",
-                "tau2.harbor.outer.verify",
+                "tau2.harbor.verify",
                 "--state-dir",
                 str(STATE_DIR),
                 "--workspace",
@@ -463,6 +494,7 @@ def write_outer_task(task_dir: Path, task: HyperTask, options: OuterExportOption
             "environment/docker-compose.yaml": dump_compose(compose),
             "environment/mcp_stub.py": Path(mcp_stub.__file__).read_text(),
             "environment/hyper-tau-tool": tool_wrapper,
+            "environment/codex-config.toml": codex_config,
             "tests/Dockerfile": verifier_dockerfile,
             "tests/docker-compose.yaml": dump_compose(verifier_compose),
             "tests/test.sh": test_script,
@@ -527,4 +559,4 @@ def _memory_mb(value, default: int) -> int:
     return int(int(text) / (1024 * 1024))
 
 
-__all__ = ["OuterExportOptions", "export_outer_tasks"]
+__all__ = ["ExportOptions", "export_tasks"]
