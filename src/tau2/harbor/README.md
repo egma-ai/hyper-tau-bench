@@ -160,3 +160,47 @@ run, and the tasks' allowlist includes the two hosts Codex then calls,
   container, the copy on your machine can no longer renew itself, and your
   own Codex will ask you to sign in again; trials running at once on one
   sign-in can run into the same problem with each other.
+
+## Publishing on Harbor Hub
+
+A dataset on [Harbor Hub](https://hub.harborframework.com/) runs on another
+machine only if its tasks name images that machine can pull, so publishing
+takes three steps.
+
+1. **Push the images.** Run the **Harbor images** workflow from the
+   repository's Actions tab. It builds both images from the commit it runs on
+   and pushes them to GitHub's container registry, with the repository's own
+   token, as `ghcr.io/<owner>/tau2-construction-runtime:<commit>` and
+   `ghcr.io/<owner>/tau2-harbor-runtime:<commit>`; the run's summary shows
+   the export command for them. From a machine signed in to a registry,
+   `make push-harbor-images REGISTRY=<registry>/<namespace>` does the same.
+   GitHub creates both packages private: make each one public once, in the
+   package's settings under Change visibility. That cannot be undone, and the
+   runtime image holds everything this repository does, hidden test
+   conversations included.
+2. **Export against those images** and list the tasks in a dataset manifest:
+
+   ```bash
+   uv run tau2 harbor export --output-dir harbor/hyper-tau \
+       --construction-image ghcr.io/egma-ai/tau2-construction-runtime:<commit> \
+       --runtime-image ghcr.io/egma-ai/tau2-harbor-runtime:<commit>
+   cd harbor/hyper-tau
+   harbor dataset init hyper-tau/hyper-tau --description "τ^τ-bench construction tasks"
+   ```
+
+3. **Sign in to the Hub and publish:**
+
+   ```bash
+   harbor auth login
+   harbor publish .
+   ```
+
+   The tasks are named `hyper-tau/<task id>`; the first publish creates the
+   `hyper-tau` organization on the Hub if no one has it yet. The dataset
+   starts private, and `harbor dataset visibility hyper-tau/hyper-tau
+   --public` opens it, with its tasks, to everyone. Anyone with access runs
+   it by name:
+
+   ```bash
+   harbor run -d hyper-tau/hyper-tau -a codex -m openai/gpt-5.5 --env-file .env
+   ```

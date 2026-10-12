@@ -49,6 +49,7 @@ Required keys depend on the task:
 | `make lint-fix` | Lint and auto-fix | `uv sync --extra dev` |
 | `make check-all` | Run lint + format (same as pre-commit hook) | `uv sync --extra dev` |
 | `make harbor-images` | Build the construction and trusted runtime images for Harbor tasks | Docker |
+| `make push-harbor-images REGISTRY=<registry>` | Build both Harbor images and push them, tagged with the commit (for publishing on Harbor Hub) | Docker |
 | `make clean` | Remove venv, caches, build artifacts | — |
 | `make env-cli` | Interactive environment CLI for testing domain tools | — |
 

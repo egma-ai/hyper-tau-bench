@@ -1,0 +1,54 @@
+name: Harbor images
+
+# Builds the two images exported Harbor tasks run on (`make harbor-images`):
+# the construction runtime and the trusted Harbor runtime. Pull requests that
+# change either image only build them. Running the workflow by hand from the
+# Actions tab also pushes both to GitHub's container registry, as
+# ghcr.io/<owner>/<image>:<commit>, so a dataset published on Harbor Hub can
+# name them (src/tau2/harbor/README.md, "Publishing on Harbor Hub").
+on:
+  pull_request:
+    paths:
+      - 'docker/hyper-construction/**'
+      - 'docker/harbor-runtime/**'
+      - '.github/workflows/harbor-images.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The two images and their build cache need more disk than a runner
+      # has free.
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - name: Build
+        run: make harbor-images
+
+      - name: Push to GitHub's container registry
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REGISTRY="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
+          REVISION=$(git rev-parse HEAD)
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          make push-harbor-images REGISTRY="$REGISTRY"
+          {
+            echo "Pushed the Harbor images for $REVISION. Export a dataset that uses them:"
+            echo
+            echo '```bash'
+            echo "uv run tau2 harbor export --output-dir harbor/hyper-tau \\"
+            echo "    --construction-image $REGISTRY/tau2-construction-runtime:$REVISION \\"
+            echo "    --runtime-image $REGISTRY/tau2-harbor-runtime:$REVISION"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

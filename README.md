@@ -129,8 +129,8 @@ the settings the native harnesses give them, and Codex can also run on a
 ChatGPT plan instead of an API key. Harbor's `oracle` agent submits the
 untouched starting kit, a check of the whole pipeline. See
 [`src/tau2/harbor/README.md`](src/tau2/harbor/README.md) for the task layout,
-the trust boundary, signing Codex in with a ChatGPT plan, and how a Harbor run
-differs from `tau2 hyper-tau`.
+the trust boundary, signing Codex in with a ChatGPT plan, how a Harbor run
+differs from `tau2 hyper-tau`, and publishing the dataset on Harbor Hub.
 
 ## API keys and model access
 
