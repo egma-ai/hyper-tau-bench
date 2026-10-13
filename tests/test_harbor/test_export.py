@@ -97,6 +97,12 @@ def test_exports_a_complete_construction_task(tmp_path, client_openings):
         config["agent"]["allowed_hosts"]
     )
     assert config["verifier"]["environment_mode"] == "separate"
+    # Scoring runs 8 conversations at once unless Harbor's environment sets
+    # TAU2_HYPER_INNER_MAX_WORKERS; the sidecar keeps tau2's default.
+    assert (
+        config["verifier"]["env"]["TAU2_HYPER_INNER_MAX_WORKERS"]
+        == "${TAU2_HYPER_INNER_MAX_WORKERS:-8}"
+    )
     (hook,) = config["verifier"]["collect"]
     assert hook["service"] == "hyper-runtime"
     assert "tau2.harbor.runtime finalize" in hook["command"]
@@ -119,6 +125,10 @@ def test_exports_a_complete_construction_task(tmp_path, client_openings):
     assert runtime["networks"] == ["default", "sandbox"]
     assert runtime["environment"][TOKEN_ENV_VAR] == token
     assert runtime["environment"]["TAU2_SEALED_CANDIDATE_ENDPOINT"] == "candidate:7000"
+    assert (
+        runtime["environment"]["TAU2_HYPER_INNER_MAX_WORKERS"]
+        == "${TAU2_HYPER_INNER_MAX_WORKERS:-}"
+    )
     settings = ConstructionConfig.from_json(
         compose_value(runtime["environment"][CONFIG_ENV_VAR])
     )

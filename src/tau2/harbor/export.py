@@ -98,6 +98,13 @@ CANDIDATE_HOST_SCRIPT = "/opt/tau2/src/tau2/hyper/sandbox/candidate_host.py"
 CANDIDATE_ENDPOINT = f"{CANDIDATE_SERVICE}:{DEFAULT_PORT}"
 CODEX_SYSTEM_CONFIG = "/etc/codex/config.toml"
 CLAUDE_MANAGED_SETTINGS = "/etc/claude-code/managed-settings.json"
+# Scored conversations the verifier runs at once unless
+# TAU2_HYPER_INNER_MAX_WORKERS is set (tau2 hyper-tau runs 32). Each runs the
+# Developer's agent in its own process in the candidate service: in a Codex
+# run of task 002, 8 at once peaked at about 2.6 GiB across the verifier and
+# the candidate service, and 32 at once ran out of memory in a 7.65 GiB Docker
+# VM. It changes how long scoring takes, not how conversations are scored.
+SCORING_MAX_WORKERS = 8
 # Built-in tools the pinned Claude Code (CLAUDE_CODE_HARNESS_VERSION) offers
 # beyond the native harness's tool list. Native runs leave them out with
 # --tools; Harbor launches Claude Code with its own flags, so the agent's
@@ -295,8 +302,14 @@ def write_construction_task(task_dir: Path, task: HyperTask, options: ExportOpti
 
     inner_env = {
         **provider_env(),
-        # Concurrency of scored inner-loop conversations (default 32).
+        # Concurrency of the sidecar's inner-loop conversations (default 32).
         "TAU2_HYPER_INNER_MAX_WORKERS": "${TAU2_HYPER_INNER_MAX_WORKERS:-}",
+    }
+    verifier_env = {
+        **inner_env,
+        "TAU2_HYPER_INNER_MAX_WORKERS": (
+            f"${{TAU2_HYPER_INNER_MAX_WORKERS:-{SCORING_MAX_WORKERS}}}"
+        ),
     }
     finalize_command = shlex.join(
         [
@@ -355,7 +368,7 @@ def write_construction_task(task_dir: Path, task: HyperTask, options: ExportOpti
                 "cpus": 4,
                 "memory_mb": 8192,
             },
-            "env": inner_env,
+            "env": verifier_env,
             "collect": [
                 {
                     # Seal and snapshot if the Developer never called submit.

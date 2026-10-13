@@ -89,9 +89,15 @@ reference build, so it submits the starting kit unchanged: a check of the
 whole pipeline whose expected reward is about zero.
 
 The agent phase defaults to the task's eight-hour budget
-(`--agent-timeout-sec`). Scoring runs up to 32 conversations at once; set
-`TAU2_HYPER_INNER_MAX_WORKERS` in the environment Harbor runs in to change
-that.
+(`--agent-timeout-sec`). Scoring runs 8 conversations at a time, where
+`tau2 hyper-tau` runs 32, because each one runs the Developer's agent in its
+own process in the `candidate` service. In a Codex run of task 002, 8 at a
+time peaked at about 2.6 GiB across the verifier and `candidate`, while 32 at
+a time ran out of memory in a 7.65 GiB Docker VM. The setting changes how
+long scoring takes, not how conversations are scored. To change it, set
+`TAU2_HYPER_INNER_MAX_WORKERS` in the environment Harbor runs in; that also
+sets how many conversations the sidecar's tools run at once, which is
+otherwise up to 32 as in native runs.
 
 ## What differs from `tau2 hyper-tau`
 
