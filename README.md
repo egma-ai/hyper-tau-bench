@@ -103,6 +103,35 @@ harnesses `opencode` and `prime-agent`. All run in the same pinned container
 with no general internet route. Adding a harness means implementing one
 driver class in `src/tau2/hyper/harnesses/`.
 
+## Running on Harbor
+
+The release tasks also run as a [Harbor](https://github.com/harbor-framework/harbor)
+dataset, so any agent Harbor supports can be benchmarked as the Developer.
+Each Harbor task is one construction task: the kit in `/workspace`, the
+Developer tools on the `hyper_tau` MCP server, and a verifier that scores the
+built agent on the hidden test conversations with the same code as
+`tau2 hyper-tau`. `reward` is the final Hyper-τ reward.
+
+```bash
+# The construction runtime (the agent's container and the sealed candidate)
+# and the trusted runtime (simulators, hidden tasks, scoring)
+make harbor-images
+
+uv run tau2 harbor export --output-dir harbor/hyper-tau \
+    --task-ids 002_airline_plus_construction_core_evidence_seeded_performance_hard
+harbor run -p harbor/hyper-tau -a codex -m openai/gpt-5.5 --env-file .env
+```
+
+The Client, the user simulator, the hidden tasks, and the model keys stay in a
+trusted sidecar and a separate verifier; during the agent phase the agent's
+container reaches only model-provider hosts. Codex and Claude Code run with
+the settings the native harnesses give them, and Codex can also run on a
+ChatGPT plan instead of an API key. Harbor's `oracle` agent submits the
+untouched starting kit, a check of the whole pipeline. See
+[`src/tau2/harbor/README.md`](src/tau2/harbor/README.md) for the task layout,
+the trust boundary, signing Codex in with a ChatGPT plan, how a Harbor run
+differs from `tau2 hyper-tau`, and publishing the dataset on Harbor Hub.
+
 ## API keys and model access
 
 A τ^τ run calls models in four seats. In the shipped configuration two keys
@@ -228,6 +257,7 @@ ask for build trajectories or rerun a sample of tasks before merging.
 | Path | Contents |
 |------|----------|
 | `src/tau2/hyper/` | The τ^τ outer loop: sandbox runtime, harness adapters, client simulator, evidence transformations, client REST API subsystem, scoring |
+| `src/tau2/harbor/` | Harbor export of the construction tasks: exporter, trusted sidecar runtime, verifier, and the MCP bridge |
 | `src/tau2/` (rest) | The τ³-bench inner loop this repo builds on: orchestrator, domains, user simulator, evaluation |
 | `data/tau2/hyper/` | Task definitions, compiled evidence bundles, SOP corpora and renders, seeded workspaces |
 | `web/leaderboard/` | Standalone results site and build-trajectory visualizer |

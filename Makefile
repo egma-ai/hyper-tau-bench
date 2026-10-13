@@ -70,6 +70,30 @@ hyper-construction-image:
 		-t tau2-construction-runtime:contract-v7 \
 		-t tau2-construction-runtime:$$REVISION .
 
+## Build the trusted runtime image that exported Harbor tasks run their sidecars and verifiers in
+.PHONY: harbor-runtime-image
+harbor-runtime-image:
+	REVISION=$$(git rev-parse HEAD); docker build \
+		--build-arg TAU2_SOURCE_REVISION=$$REVISION \
+		-f docker/harbor-runtime/Dockerfile \
+		-t tau2-harbor-runtime:local \
+		-t tau2-harbor-runtime:$$REVISION .
+
+## Build every image exported Harbor tasks use
+.PHONY: harbor-images
+harbor-images: hyper-construction-image harbor-runtime-image
+
+## Build the Harbor images and push them to REGISTRY (e.g. ghcr.io/<owner>), tagged with the commit
+.PHONY: push-harbor-images
+push-harbor-images:
+	@test -n "$(REGISTRY)" || { echo "Set REGISTRY, e.g. make push-harbor-images REGISTRY=ghcr.io/<owner>"; exit 1; }
+	@git diff --quiet HEAD -- || { echo "Commit your changes first: the pushed images are tagged with the commit"; exit 1; }
+	$(MAKE) harbor-images
+	REVISION=$$(git rev-parse HEAD); for image in tau2-construction-runtime tau2-harbor-runtime; do \
+		docker tag $$image:$$REVISION $(REGISTRY)/$$image:$$REVISION && \
+		docker push $(REGISTRY)/$$image:$$REVISION || exit 1; \
+	done
+
 ## Install pre-commit hooks
 .PHONY: setup-hooks
 setup-hooks:

@@ -8,6 +8,7 @@ candidate-visible state and messages. LLM requests are mediated by the host.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import stat
 import subprocess
@@ -15,7 +16,7 @@ import threading
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -30,6 +31,10 @@ from tau2.environment.toolkit import ToolKitBase, ToolType
 from tau2.hyper.agent_context import ModelConfig, get_agent_context
 from tau2.hyper.client_api.runtime import ClientAPIRuntime
 from tau2.hyper.runtime_contract import DEFAULT_CONSTRUCTION_RUNTIME_IMAGE
+from tau2.hyper.sandbox.candidate_host import (
+    CANDIDATE_BOOTSTRAP,
+    connect_candidate_session,
+)
 from tau2.utils import get_dict_hash
 from tau2.utils.utils import get_now
 
@@ -81,6 +86,14 @@ class SealedRunnerConfig:
     client_api_mode: Optional[str] = None
     client_api_factory: Optional[Callable[..., ClientAPIRuntime]] = None
     client_api_mock: Optional[dict[str, Any]] = None
+    # ``host:port`` of a long-lived candidate service running
+    # ``candidate_host`` (for runtimes without a Docker daemon). When set,
+    # sessions open there instead of in a fresh ``docker run`` container,
+    # and that service, not ``image``/``memory``/``cpus``, defines the
+    # sandbox; ``kit_path`` must be this side's view of its workspace.
+    candidate_endpoint: Optional[str] = field(
+        default_factory=lambda: os.environ.get("TAU2_SEALED_CANDIDATE_ENDPOINT") or None
+    )
 
     def __post_init__(self) -> None:
         if self.client_api_factory is not None and self.client_api_mock is not None:
@@ -213,18 +226,14 @@ class CandidateProcess:
                 "python",
                 "-I",
                 "-c",
-                (
-                    "import sys;"
-                    "sys.path.insert(0, '/opt/tau2/src');"
-                    "sys.path.append('/workspace');"
-                    "from tau2.hyper.sandbox.candidate_server import main;"
-                    "main()"
-                ),
+                CANDIDATE_BOOTSTRAP,
             ]
         )
         return command
 
-    def _start(self) -> subprocess.Popen:
+    def _start(self):
+        if self.config.candidate_endpoint:
+            return connect_candidate_session(self.config.candidate_endpoint)
         try:
             return subprocess.Popen(
                 self._build_command(),

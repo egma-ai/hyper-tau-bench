@@ -1,0 +1,16 @@
+# Build context for docker/harbor-runtime/Dockerfile. Unlike the repository's
+# root .dockerignore (written for the construction image, which must not ship
+# domain data), this image needs data/tau2 in full.
+.git
+.venv
+.ruff_cache
+.pytest_cache
+**/__pycache__
+**/*.pyc
+.env
+data/simulations
+data/.embeddings_cache
+data/voice
+web
+figs
+tests
